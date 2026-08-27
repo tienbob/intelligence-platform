@@ -1,98 +1,104 @@
-# Intelligence Platform v2.0
+# Intelligence Platform (Architecture V3)
 
 **Domain-agnostic AI research engine.**
 
-The core knows **HOW** to run intelligence.
+The framework knows **HOW** to run intelligence.
 The domain knows **WHAT** intelligence means.
 
-## Architecture
+> **Current status (honest):** the V3 framework is implemented and
+> test-verified through **Phase 12** (framework hardening + deterministic
+> Stock proof, 110/110 tests). Production analysis still runs through legacy
+> Stock orchestration; shadow production (Phase 13), storage-ownership
+> migration (Phase 15) and switchover (Phase 16) are pending. See
+> `intelligence-platform-stock/docs/CHECKLIST.md` for the gated roadmap and
+> `docs/Audit_result.md` for the latest audit.
+
+## Repository Layout
 
 ```
 intelligence-platform/
-├── app/
-│   ├── core/                    # General infrastructure (database, logging, security, caching)
-│   ├── intelligence/            # Core engine (pipeline, registry, contracts)
-│   ├── shared/                  # Domain-neutral entities and types
-│   ├── domains/                 # Pluggable domain packs
-│   │   ├── stock/               # Stock & Investment Intelligence
-│   │   └── hr/                  # HR Intelligence (placeholder)
-│   ├── workers/                 # Domain-agnostic scheduler
-│   └── main.py                  # Auto-discovers and mounts domains
+├── intelligence-platform-stock/       # Python app: framework + Stock domain pack
+│   ├── app/
+│   │   ├── core/                      # Infra (config, db, logging, versioning)
+│   │   ├── intelligence/              # V3 FRAMEWORK — pipeline, registry, contracts,
+│   │   │                              #   embeddings, RAG, LLM, evidence, validation
+│   │   ├── shared/                    # Domain-neutral entities (EntityRef, Evidence…)
+│   │   ├── domains/                   # Pluggable domain packs
+│   │   │   ├── stock/                 #   Stock & investment intelligence (complete)
+│   │   │   ├── example/               #   Minimal reference domain
+│   │   │   └── hr/                    #   HR intelligence (deferred)
+│   │   └── main.py                    # Auto-discovers and mounts enabled domains
+│   └── docs/                          # Architecture V3, audits, checklist
+├── intelligence-platform-api/         # Rails API gateway
+├── intelligence-platform-frontend/    # React frontend
+└── docker-compose.yml                 # db (pgvector) + redis + python + rails + web
 ```
 
-## Pipeline
+## The Pipeline
+
+The generic `IntelligencePipeline` (framework path) runs 12 stages:
 
 ```
 Request → Domain Resolver → Ingestion → Normalization →
 Entity Resolution → Evidence Collection → RAG Retrieval →
-Context Builder → LLM → Structured Validation →
-Domain Scoring → Result
+Context Builder → LLM → Structured Validation → Domain Scoring → Result
 ```
 
-## Adding a New Domain
-
-1. Create `app/domains/<name>/` with a `manifest.py`
-2. Implement the `DomainModule` protocol (see `app/intelligence/contracts.py`)
-3. Set `INTELLIGENCE_DOMAINS=stock,<name>` (or omit to enable all)
-4. Restart — the registry auto-discovers it
-
-**No changes to core needed.**
-
-## Domain Contract
-
-Each domain must provide:
-- `get_providers()` — data sources
-- `get_normalizers()` — data transformation
-- `get_context_builder()` — LLM context construction
-- `get_scoring_strategy()` — domain-specific scoring
-- `get_intelligence_tasks()` — background jobs
-- `get_api_router()` — FastAPI endpoints
-- `get_prompts()` — LLM prompt templates
-- `get_schemas()` — Pydantic schemas
-- `get_models()` — SQLAlchemy models
-- `get_config()` — domain configuration
-
-## Current Domains
-
-| Domain | Status | Description |
-|--------|--------|-------------|
-| `stock` | Placeholder | Stock & investment intelligence (migrate from market-intelligence/) |
-| `hr` | Placeholder | HR intelligence: candidate scoring, job matching, salary benchmarking |
-
-## Migration from market-intelligence/
-
-The `stock/` domain is a placeholder with the complete structure ready.
-To activate it:
-
-1. Copy provider implementations from `market-intelligence/app/providers/` into `domains/stock/providers.py`
-2. Copy model definitions from `market-intelligence/app/models/` into `domains/stock/models/`
-3. Copy context builder logic from `market-intelligence/app/services/context_builder.py` into `domains/stock/context_builder.py`
-4. Copy scoring engine from `market-intelligence/app/services/investment_scoring.py` into `domains/stock/scoring.py`
-5. Copy API endpoints from `market-intelligence/app/api/v1/` into `domains/stock/api.py`
-6. Copy worker implementations from `market-intelligence/app/workers/` into `domains/stock/workers.py`
-
-## Environment Variables
-
-```bash
-# Enable specific domains (comma-separated)
-INTELLIGENCE_DOMAINS=stock,hr
-
-# Core settings (see app/core/config.py)
-DATABASE_URL=postgresql+asyncpg://...
-LLM_API_KEY=...
-REDIS_URL=...
-```
+Every stage records an explicit status — `success`, `degraded`, `skipped`,
+or `failed: <error>` — so partial data availability is observable instead of
+silently swallowed.
 
 ## Running
 
 ```bash
-uvicorn app.main:app --reload
+cp .env.example .env          # then fill in provider API keys
+docker compose up --build     # db, redis, python :8001, rails :3000, frontend :3000
 ```
+
+## Domain Enablement
+
+Enabled domains come from an explicit allow-list — discovery on disk does
+**not** imply activation:
+
+```bash
+INTELLIGENCE_DOMAINS=stock        # hr stays disabled even though it exists
+```
+
+Adding a domain later: create `app/domains/<name>/manifest.py` implementing
+the `DomainModule` protocol (`app/intelligence/contracts.py`), add it to
+`INTELLIGENCE_DOMAINS`, restart. No core changes needed.
+
+## Tests
+
+```bash
+cd intelligence-platform-stock
+.venv/bin/python -m pytest -q
+```
+
+## Version Labels
+
+Version identity is deliberately disambiguated (no single conflated
+`version` field):
+
+| Label                  | Owner                                   | Surfaced by |
+|------------------------|-----------------------------------------|-------------|
+| `application_version`  | `settings.APP_VERSION` (env-tunable)    | FastAPI + `GET /` |
+| `architecture_version` | `app/core/versioning.py`                | `GET /` |
+| `pipeline_version`     | `app/core/versioning.py`                | `GET /`, analysis metadata |
+| `domain_version`       | each domain's manifest (`version`)      | `GET /domains`, analysis metadata |
+| `scoring_version`      | Stock config `SCORING_VERSION`          | scoring provenance |
+| `prompt_version`       | Stock manifest `PROMPT_VERSION`         | prompt provenance |
 
 ## Key Design Principles
 
-1. **Core never imports domain code** — domains are discovered via the registry
-2. **Domain owns its data model** — each domain has its own tables
+1. **Framework never imports domain code** — enforced by purity tests
+2. **Framework owns HOW, domain owns WHAT**
 3. **Scoring is domain-specific** — the interface is general, the algorithm is not
-4. **LLM/RAG/Embeddings are general** — they work the same for any domain
-5. **Providers are abstracted** — swap data sources without changing core
+4. **LLM/RAG/embeddings are general** — identical mechanics for any domain
+5. **Failures are classified, never swallowed** — degraded ≠ success
+
+## Documentation
+
+- `intelligence-platform-stock/docs/INTELLIGENCE_PLATFORM_ARCHITECTURE_V3.md` — authoritative architecture spec
+- `intelligence-platform-stock/docs/CHECKLIST.md` — gated completion roadmap (Gate 0–6)
+- `intelligence-platform-stock/docs/Audit_result.md` — Phase 12 audit results

@@ -53,6 +53,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/intelligence_stock
       REDIS_URL: redis://redis:6379/0
+      # Explicit domain enablement (Gate 0): never rely on default-discovery
+      # silently enabling packs that merely live on disk (e.g. hr).
+      INTELLIGENCE_DOMAINS: ${INTELLIGENCE_DOMAINS:-stock}
       INTERNAL_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
     expose:
       - "8001"
