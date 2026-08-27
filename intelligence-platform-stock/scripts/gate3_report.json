@@ -1,0 +1,385 @@
+{
+  "AAPL": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 12570,
+      "analysis_confidence": 1.0,
+      "summary_present": true,
+      "overall_score": 52.20587318411432,
+      "fundamental_score": 76.24065112599015,
+      "technical_score": 54.20964200065947,
+      "risk_score": 32.37421822991785,
+      "confidence": 1.0,
+      "recommendation": "NEUTRAL",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 6588,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 52.20587318411432,
+      "recommendation": "NEUTRAL",
+      "fundamental_score": 76.24065112599015,
+      "technical_score": 54.20964200065947,
+      "risk_score": 32.37421822991785,
+      "pipeline_status": "completed",
+      "analysis_confidence": 1.0,
+      "confidence": 1.0
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "Apple (AAPL) continues to demonstrate exceptional profitability and strong cash flow, supported by its capital-light AI strategy and 'Apple Intelligence' driving device demand. The company remains Berkshire Hathaway's largest holding, though it faces margin pressures from rising memory chip prices and leadership transition under new CEO John Ternus.",
+      "insights": [],
+      "risks": [
+        "Margin compression due to rising component costs (e.g., memory chips).",
+        "Leadership transition risks under new CEO John Ternus.",
+        "Intense competition in AI and voice interfaces from competitors like Alphabet and SoundHound."
+      ]
+    },
+    "evidence_attribution_count": 5
+  },
+  "NVDA": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 13052,
+      "analysis_confidence": 1.0,
+      "summary_present": true,
+      "overall_score": 61.262182157321334,
+      "fundamental_score": 99.04364945380631,
+      "technical_score": 43.71671289251247,
+      "risk_score": 40.42447136629551,
+      "confidence": 1.0,
+      "recommendation": "WATCH",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 7779,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 61.262182157321334,
+      "recommendation": "WATCH",
+      "fundamental_score": 99.04364945380631,
+      "technical_score": 43.71671289251247,
+      "risk_score": 40.42447136629551,
+      "pipeline_status": "completed",
+      "analysis_confidence": 1.0,
+      "confidence": 1.0
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "Nvidia recently delivered record Q2 fiscal 2027 results, with revenue surging 106% year-over-year to $96.2 billion and adjusted EPS rising 120% to $2.22. Despite this exceptional performance and strong Q3 guidance of $108 billion, the stock's valuation has compressed to under 27x earnings, presenting a highly attractive entry point relative to its growth profile.",
+      "insights": [],
+      "risks": [
+        "Loss or reduction in capital expenditure from any of the top three customers that make up over 50% of sales.",
+        "Deceleration in overall AI infrastructure demand or hyperscaler capital expenditure.",
+        "Macroeconomic headwinds affecting enterprise IT and cloud spending."
+      ]
+    },
+    "evidence_attribution_count": 5
+  },
+  "MSFT": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 13923,
+      "analysis_confidence": 1.0,
+      "summary_present": true,
+      "overall_score": 41.98342004794918,
+      "fundamental_score": 60.95794883262188,
+      "technical_score": 35.26670457391575,
+      "risk_score": 31.201338620807633,
+      "confidence": 1.0,
+      "recommendation": "CAUTION",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 7219,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 41.98342004794918,
+      "recommendation": "CAUTION",
+      "fundamental_score": 60.95794883262188,
+      "technical_score": 35.26670457391575,
+      "risk_score": 31.201338620807633,
+      "pipeline_status": "completed",
+      "analysis_confidence": 1.0,
+      "confidence": 1.0
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "Microsoft (MSFT) delivered strong fiscal 2026 financial results with revenue growing 18% to $331.8 billion and net income rising 31% to $133.7 billion. Despite these robust fundamentals, the stock has underperformed the broader market in 2026 due to valuation multiple compression and investor concerns over a massive $175 billion capital expenditure surge for AI infrastructure.",
+      "insights": [],
+      "risks": [
+        "Margin compression from sustained high capital expenditures on AI infrastructure.",
+        "Lower-than-expected ROI on AI investments if enterprise adoption of Copilot and Azure AI services slows.",
+        "Opportunity cost of holding MSFT if peers continue to outperform."
+      ]
+    },
+    "evidence_attribution_count": 5
+  },
+  "TSLA": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 11607,
+      "analysis_confidence": 1.0,
+      "summary_present": true,
+      "overall_score": 21.9249385585517,
+      "fundamental_score": 30.90608462441119,
+      "technical_score": 36.863556329068835,
+      "risk_score": 46.12703265325382,
+      "confidence": 1.0,
+      "recommendation": "HIGH_RISK",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 5641,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 21.9249385585517,
+      "recommendation": "HIGH_RISK",
+      "fundamental_score": 30.90608462441119,
+      "technical_score": 36.863556329068835,
+      "risk_score": 46.12703265325382,
+      "pipeline_status": "completed",
+      "analysis_confidence": 1.0,
+      "confidence": 1.0
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "Tesla is experiencing significant stock underperformance and margin compression in 2026 due to delayed robotaxi commercialization and high capital expenditures. Despite deteriorating profitability in its core EV business, the company remains a high-potential speculative bet on AI, robotics, and autonomous driving, with long-term opportunities as expectations reset.",
+      "insights": [],
+      "risks": [
+        "Execution and scaling risks in autonomous driving and robotics",
+        "Prolonged financial stress from high capex and low operating margins",
+        "Valuation compression if high-growth AI initiatives fail to materialize or monetize quickly"
+      ]
+    },
+    "evidence_attribution_count": 5
+  },
+  "SPY": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 9572,
+      "analysis_confidence": 0.8,
+      "summary_present": true,
+      "overall_score": 48.33235281551879,
+      "fundamental_score": 50.0,
+      "technical_score": 57.908817308851695,
+      "risk_score": 10.833526102442544,
+      "confidence": 0.8,
+      "recommendation": "NEUTRAL",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 6619,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 48.33235281551879,
+      "recommendation": "NEUTRAL",
+      "fundamental_score": 50.0,
+      "technical_score": 57.908817308851695,
+      "risk_score": 10.833526102442544,
+      "pipeline_status": "completed",
+      "analysis_confidence": 0.8,
+      "confidence": 0.8
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "SPY is the oldest and most liquid S&P 500 tracking ETF, making it a staple for institutional traders and active market participants. However, for long-term retail investors, it faces strong competition from lower-cost alternatives like Vanguard's VOO.",
+      "insights": [],
+      "risks": [
+        "Underperformance relative to identical index funds with lower expense ratios over long horizons.",
+        "Systemic market risk and volatility inherent in the S&P 500 index."
+      ]
+    },
+    "evidence_attribution_count": 5
+  },
+  "SKHY": {
+    "db": {
+      "present": true,
+      "scored": true
+    },
+    "legacy": {
+      "path": "legacy",
+      "llm_success": true,
+      "llm_model": "gemini-3.5-flash",
+      "llm_tokens": 11260,
+      "analysis_confidence": 0.85,
+      "summary_present": true,
+      "overall_score": 41.10084362108282,
+      "fundamental_score": 50.0,
+      "technical_score": 39.94739694976224,
+      "risk_score": 65.68139049262273,
+      "confidence": 0.85,
+      "recommendation": "CAUTION",
+      "scoring_model": "investment_score_v1",
+      "stages": {
+        "all": "success"
+      }
+    },
+    "framework": {
+      "evidence_attribute_count": 5,
+      "evidence_source_types": [
+        "news"
+      ],
+      "llm_tokens": 5294,
+      "prompt_name": "stock_company",
+      "llm_provider": "gemini",
+      "stages": {
+        "entity_resolution": "success",
+        "ingestion": "success",
+        "normalization": "success",
+        "evidence": "success",
+        "rag": "success",
+        "context": "success",
+        "llm": "success",
+        "validation": "success",
+        "scoring": "success"
+      },
+      "llm_success": true,
+      "overall_score": 41.10084362108282,
+      "recommendation": "CAUTION",
+      "fundamental_score": 50.0,
+      "technical_score": 39.94739694976224,
+      "risk_score": 65.68139049262273,
+      "pipeline_status": "completed",
+      "analysis_confidence": 0.85,
+      "confidence": 0.85
+    },
+    "issues": [],
+    "semantic": {
+      "summary": "SK Hynix is a leading semiconductor memory manufacturer positioned at the center of the AI infrastructure boom, leveraging its dominant market share in High-Bandwidth Memory (HBM). The company benefits from a strategic partnership with Nvidia for next-generation HBM4 solutions and trades at an exceptionally low valuation relative to its growth profile.",
+      "insights": [],
+      "risks": [
+        "Aggressive capacity expansion by competitors leading to an oversupply of HBM.",
+        "A potential slowdown or contraction in global AI infrastructure capital expenditures.",
+        "Macroeconomic headwinds impacting broader enterprise IT and consumer electronics demand."
+      ]
+    },
+    "evidence_attribution_count": 5
+  }
+}

@@ -1,0 +1,14 @@
+# Keep secrets and dev artifacts out of the image
+log/*
+tmp/*
+.git
+.gitignore
+.env
+.env.*
+config/master.key
+config/credentials.yml.enc.bak
+db/*.sqlite3
+node_modules
+public/assets
+storage
+coverage

@@ -1,0 +1,77 @@
+# ── Secrets ──────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python / Intelligence Platform ──────────────────────────────
+intelligence-platform-stock/__pycache__/
+intelligence-platform-stock/**/*.py[cod]
+intelligence-platform-stock/*.egg-info/
+intelligence-platform-stock/.venv/
+intelligence-platform-stock/venv/
+intelligence-platform-stock/.pytest_cache/
+intelligence-platform-stock/.mypy_cache/
+intelligence-platform-stock/.ruff_cache/
+
+# ── Python general ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / React frontend ────────────────────────────────────────
+intelligence-platform-frontend/node_modules/
+intelligence-platform-frontend/dist/
+intelligence-platform-frontend/build/
+*.tsbuildinfo
+
+# ── Ruby / Rails API gateway ────────────────────────────────────
+intelligence-platform-api/log/*
+intelligence-platform-api/tmp/*
+intelligence-platform-api/storage/*
+intelligence-platform-api/vendor/bundle/
+intelligence-platform-api/public/assets/
+intelligence-platform-api/public/packs/
+*.gem
+
+# ── Databases / caches ───────────────────────────────────────────
+*.sqlite3
+*.db
+pgdata/
+redis-data/
+
+# ── Docker ───────────────────────────────────────────────────────
+.docker/
+docker-compose.override.yml
+
+# ── OS / editor ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Build / test artifacts ───────────────────────────────────────
+dist/
+build/
+coverage/
+htmlcov/
+
+# ── Logs ─────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Temporary files ──────────────────────────────────────────────
+*.tmp
+*.temp
+*.bak
+*~

@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@theme {
+  /* Deep Market Core — Design System Colors */
+  --color-surface: #051424;
+  --color-surface-dim: #051424;
+  --color-surface-bright: #2c3a4c;
+  --color-surface-container-lowest: #010f1f;
+  --color-surface-container-low: #0d1c2d;
+  --color-surface-container: #122131;
+  --color-surface-container-high: #1c2b3c;
+  --color-surface-container-highest: #273647;
+  --color-on-surface: #d4e4fa;
+  --color-on-surface-variant: #c6c6cd;
+  --color-inverse-surface: #d4e4fa;
+  --color-inverse-on-surface: #233143;
+  --color-outline: #909097;
+  --color-outline-variant: #46464c;
+  --color-surface-tint: #c0c6de;
+  --color-primary: #c0c6de;
+  --color-on-primary: #2a3043;
+  --color-primary-container: #020617;
+  --color-on-primary-container: #72778d;
+  --color-inverse-primary: #585e73;
+  --color-secondary: #adc6ff;
+  --color-on-secondary: #002e6a;
+  --color-secondary-container: #0566d9;
+  --color-on-secondary-container: #e6ecff;
+  --color-tertiary: #4edea3;
+  --color-on-tertiary: #003824;
+  --color-tertiary-container: #000904;
+  --color-on-tertiary-container: #00895e;
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+  --color-primary-fixed: #dce1fb;
+  --color-primary-fixed-dim: #c0c6de;
+  --color-on-primary-fixed: #151b2d;
+  --color-on-primary-fixed-variant: #40465a;
+  --color-secondary-fixed: #d8e2ff;
+  --color-secondary-fixed-dim: #adc6ff;
+  --color-on-secondary-fixed: #001a42;
+  --color-on-secondary-fixed-variant: #004395;
+  --color-tertiary-fixed: #6ffbbe;
+  --color-tertiary-fixed-dim: #4edea3;
+  --color-on-tertiary-fixed: #002113;
+  --color-on-tertiary-fixed-variant: #005236;
+  --color-background: #051424;
+  --color-on-background: #d4e4fa;
+  --color-surface-variant: #273647;
+
+  /* Typography */
+  --font-display-lg: "Inter", sans-serif;
+  --font-headline-md: "Inter", sans-serif;
+  --font-headline-sm: "Inter", sans-serif;
+  --font-body-md: "Inter", sans-serif;
+  --font-body-sm: "Inter", sans-serif;
+  --font-data-lg: "JetBrains Mono", monospace;
+  --font-data-md: "JetBrains Mono", monospace;
+  --font-data-sm: "JetBrains Mono", monospace;
+
+  /* Spacing */
+  --spacing-unit: 4px;
+  --spacing-container-margin: 24px;
+  --spacing-gutter: 16px;
+  --spacing-widget-padding: 16px;
+  --spacing-sidebar-width: 240px;
+  --spacing-sidebar-collapsed: 64px;
+}
+
+@layer base {
+  body {
+    font-family: "Inter", sans-serif;
+    background-color: var(--color-background);
+    color: var(--color-on-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Custom scrollbar for data tables */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-surface);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-surface-variant);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-outline);
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-container-low border border-outline-variant rounded-lg p-widget-padding;
+  }
+  .glass-panel {
+    @apply bg-surface-container-high/80 backdrop-blur-md border border-outline-variant;
+  }
+  .btn-primary {
+    @apply bg-secondary-container text-on-secondary-container px-4 py-2 rounded font-semibold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-surface-container-high border border-outline-variant text-on-surface px-4 py-2 rounded hover:bg-surface-variant transition-colors;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+  .input-field {
+    @apply w-full bg-surface-container-high border border-outline-variant rounded py-1.5 px-3 text-on-surface text-sm focus:outline-none focus:border-secondary-container focus:ring-1 focus:ring-secondary-container transition-all placeholder-on-surface-variant;
+  }
+  .select-field {
+    @apply w-full bg-surface-container-high border border-outline-variant rounded py-1.5 px-3 text-on-surface text-sm focus:outline-none focus:border-secondary-container focus:ring-1 focus:ring-secondary-container transition-all appearance-none cursor-pointer;
+  }
+  .status-chip {
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .data-font {
+    font-family: "JetBrains Mono", monospace;
+  }
+}

@@ -1,0 +1,66 @@
+Reference matrix: ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'SPY', 'SKHY']  (quota pause=70.0s)
+====================================================================
+TICKER AAPL  db={'present': True, 'scored': True}
+  legacy    rec=NEUTRAL score=52.20587318411432 llm=True fund=76.24065112599015
+  framework rec=NEUTRAL score=52.20587318411432 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: Apple (AAPL) continues to demonstrate exceptional profitability and strong cash flow, supported by its capital-light AI strategy and 'Apple Intelligence' driving device demand. The
+...quota pause 70.0s before NVDA
+====================================================================
+TICKER NVDA  db={'present': True, 'scored': True}
+  legacy    rec=WATCH score=61.262182157321334 llm=True fund=99.04364945380631
+  framework rec=WATCH score=61.262182157321334 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: Nvidia recently delivered record Q2 fiscal 2027 results, with revenue surging 106% year-over-year to $96.2 billion and adjusted EPS rising 120% to $2.22. Despite this exceptional p
+...quota pause 70.0s before MSFT
+====================================================================
+TICKER MSFT  db={'present': True, 'scored': True}
+  legacy    rec=CAUTION score=41.98342004794918 llm=True fund=60.95794883262188
+  framework rec=CAUTION score=41.98342004794918 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: Microsoft (MSFT) delivered strong fiscal 2026 financial results with revenue growing 18% to $331.8 billion and net income rising 31% to $133.7 billion. Despite these robust fundame
+...quota pause 70.0s before TSLA
+Business rule validation issues: ['valuation score -0.3867403314917127 out of bounds [0, 100]']
+Business rule validation issues: ['valuation score -0.3867403314917127 out of bounds [0, 100]']
+Business rule validation issues: ['valuation score -0.3867403314917127 out of bounds [0, 100]']
+====================================================================
+TICKER TSLA  db={'present': True, 'scored': True}
+  legacy    rec=HIGH_RISK score=21.9249385585517 llm=True fund=30.90608462441119
+  framework rec=HIGH_RISK score=21.9249385585517 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: Tesla is experiencing significant stock underperformance and margin compression in 2026 due to delayed robotaxi commercialization and high capital expenditures. Despite deteriorati
+...quota pause 70.0s before SPY
+====================================================================
+TICKER SPY  db={'present': True, 'scored': True}
+  legacy    rec=NEUTRAL score=48.33235281551879 llm=True fund=50.0
+  framework rec=NEUTRAL score=48.33235281551879 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: SPY is the oldest and most liquid S&P 500 tracking ETF, making it a staple for institutional traders and active market participants. However, for long-term retail investors, it fac
+...quota pause 70.0s before SKHY
+====================================================================
+TICKER SKHY  db={'present': True, 'scored': True}
+  legacy    rec=CAUTION score=41.10084362108282 llm=True fund=50.0
+  framework rec=CAUTION score=41.10084362108282 llm=True status=completed evid_attr=5 prov=gemini
+  framework non-success stages: NONE
+  validator/validation stage: success
+  hard-gate issues: NONE (PASS)
+  summary: SK Hynix is a leading semiconductor memory manufacturer positioned at the center of the AI infrastructure boom, leveraging its dominant market share in High-Bandwidth Memory (HBM).
+====================================================================
+GATE 3 RESULT: 6/6 hard-gate PASS
+  AAPL: PASS []
+  NVDA: PASS []
+  MSFT: PASS []
+  TSLA: PASS []
+  SPY: PASS []
+  SKHY: PASS []
+Full report -> /tmp/gate3_report.json
