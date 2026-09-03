@@ -1,15 +1,15 @@
 """
-Company analysis execution core (shared contract).
+Company analysis canonical persistence core.
 
-ONE implementation of "run a full company analysis" — consumed by thin
-entry-point wrappers:
+ONE canonical writer for the persisted `analyses` contract (scores,
+source-backed claim rows, snapshot columns, provenance). Analysis EXECUTION
+belongs to the framework path:
 
-    POST /analysis/company  →  api/analysis.py wrapper      (on_stage=…)
-    Gate-3 legacy oracle    →  workers/analysis_worker.py   (on_stage=None)
+    api/analysis.py / workers/analysis_worker.py
+        → execute_company_analysis() → IntelligencePipeline → persist_analysis()
 
-The service owns every step that produces the persisted `analyses` contract
-(scores, source-backed claim rows, snapshot columns, provenance). Wrappers
-own only entry-point concerns: row lifecycle and progress reporting.
+Legacy orchestration (context/LLM/scoring stages + execute()) was removed in
+Gate 6 (docs/PLAN.md §6.1): the framework is the only production engine.
 
 Canonical contract: docs/PLAN_ANALYSIS_CONTRACT.md
 """
@@ -18,19 +18,17 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.logging import get_logger
 from app.domains.stock.models.analysis import Analysis, AnalysisSource
 from app.domains.stock.models.company import Company
 
-logger = get_logger(__name__)
-
 ANALYSIS_VERSION = "1.0"
 
-StageCallback = Callable[[str], Awaitable[None]]
+StageCallback = Any  # Callable[[str], Awaitable[None]] — kept for API compat
 
 
 @dataclass
@@ -57,75 +55,16 @@ def _safe_float(v: Any) -> float | None:
 
 
 class CompanyAnalysisService:
-    """Shared company-analysis orchestration (Sections 29–34, 41, 54–56).
+    """Canonical persistence writer for the `analyses` contract.
 
-    Dependencies are injectable so tests can substitute fakes the same way
-    they do for the wrappers (monkeypatch the wrapper module's names).
+    The framework path (`_execute_framework`) calls ``persist_analysis()``
+    so storage shape can never drift between engines (PLAN.md: one
+    persisted contract). Context/LLM/scoring stages live in the pipeline;
+    this class intentionally holds NO orchestration.
     """
 
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        context_builder: Any,
-        llm_service: Any,
-        evidence_attributor_factory: Any = None,
-        scoring_engine_factory: Any = None,
-    ):
+    def __init__(self, session: AsyncSession):
         self.session = session
-        self.context_builder = context_builder
-        self.llm_service = llm_service
-        self.evidence_attributor_factory = evidence_attributor_factory
-        self.scoring_engine_factory = scoring_engine_factory
-
-    # ── Stages (each maps 1:1 to a canonical-contract concern) ──────
-
-    async def build_context(
-        self,
-        company: Company,
-        *,
-        include_news: bool = True,
-        include_fundamentals: bool = True,
-        include_technical: bool = True,
-        include_macro: bool = True,
-    ) -> dict[str, Any]:
-        return await self.context_builder.build_full_context(
-            company,
-            include_news=include_news,
-            include_fundamentals=include_fundamentals,
-            include_technical=include_technical,
-            include_macro=include_macro,
-        )
-
-    def build_attributor(self, context: dict[str, Any]) -> Any | None:
-        """§32: register RAG sources so the LLM stage can cite valid IDs."""
-        if self.evidence_attributor_factory is None:
-            return None
-        attributor = self.evidence_attributor_factory()
-        attributor.register_sources(context.get("rag_context", {}))
-        return attributor
-
-    async def run_llm_analysis(
-        self, context: dict[str, Any], *, evidence_attributor: Any = None
-    ) -> dict[str, Any]:
-        return await self.llm_service.analyze_company(
-            context, evidence_attributor=evidence_attributor
-        )
-
-    async def calculate_scores(self, company_id: int) -> Any:
-        """Deterministic investment scoring (Section 34) — never LLM."""
-        engine = (
-            self.scoring_engine_factory(self.session)
-            if self.scoring_engine_factory
-            else None
-        )
-        if engine is None:
-            from app.domains.stock.scoring.investment_scoring import (
-                InvestmentScoringEngine,
-            )
-
-            engine = InvestmentScoringEngine(self.session)
-        return await engine.calculate_score(company_id)
 
     # ── Persistence (single source of truth for the row contract) ───
 
@@ -143,20 +82,24 @@ class CompanyAnalysisService:
         meta = llm_output.get("_meta", {})
 
         # Snapshots as first-class queryable columns.
-        analysis.market_snapshot = context.get("market_snapshot")
-        analysis.fundamental_snapshot = context.get("fundamental_snapshot")
-        analysis.technical_snapshot = context.get("technical_snapshot")
-        analysis.news_snapshot = context.get("news_snapshot")
-        analysis.macro_snapshot = context.get("macro_snapshot")
-        analysis.risk_snapshot = context.get("risk_snapshot")
+        analysis.market_snapshot = jsonable_encoder(context.get("market_snapshot"))
+        analysis.fundamental_snapshot = jsonable_encoder(
+            context.get("fundamental_snapshot")
+        )
+        analysis.technical_snapshot = jsonable_encoder(
+            context.get("technical_snapshot")
+        )
+        analysis.news_snapshot = jsonable_encoder(context.get("news_snapshot"))
+        analysis.macro_snapshot = jsonable_encoder(context.get("macro_snapshot"))
+        analysis.risk_snapshot = jsonable_encoder(context.get("risk_snapshot"))
 
         # Full LLM output plus debug embeddings of inputs/evidence.
-        analysis.llm_analysis = {
+        analysis.llm_analysis = jsonable_encoder({
             **llm_output,
             "_input_context": context,
             "_evidence": evidence_package,
             "_meta_full": meta,
-        }
+        })
 
         # Deterministic scoring contract (engine-owned, never LLM opinion).
         analysis.investment_score = score.overall_score
@@ -230,77 +173,7 @@ class CompanyAnalysisService:
         await self.session.refresh(analysis)
         return analysis
 
-    # ── Orchestrator ────────────────────────────────────────────────
-
-    async def execute(
-        self,
-        *,
-        company: Company,
-        existing: Analysis | None = None,
-        include_news: bool = True,
-        include_fundamentals: bool = True,
-        include_technical: bool = True,
-        include_macro: bool = True,
-        on_stage: StageCallback | None = None,
-    ) -> AnalysisExecutionResult:
-        """Run the complete pipeline and persist one contract-complete row.
-
-        ``on_stage`` is an entry-point concern: pass an awaitable to report
-        progress (API wrapper commits status transitions); pass ``None``
-        (worker / Gate-3 oracle) to run silently.
-        """
-        started = time.monotonic()
-
-        async def stage(name: str) -> None:
-            if on_stage is not None:
-                await on_stage(name)
-
-        await stage("calculating_metrics")
-        context = await self.build_context(
-            company,
-            include_news=include_news,
-            include_fundamentals=include_fundamentals,
-            include_technical=include_technical,
-            include_macro=include_macro,
-        )
-
-        await stage("retrieving_context")
-        attributor = self.build_attributor(context)
-
-        await stage("llm_analysis")
-        llm_output = await self.run_llm_analysis(
-            context, evidence_attributor=attributor
-        )
-        evidence_package = llm_output.get("evidence", {}) or {}
-
-        await stage("risk_analysis")
-        score = await self.calculate_scores(company.id)
-
-        analysis = await self.persist_analysis(
-            company=company,
-            context=context,
-            llm_output=llm_output,
-            score=score,
-            evidence_package=evidence_package,
-            duration_seconds=round(time.monotonic() - started, 3),
-            existing=existing,
-        )
-
-        logger.info(
-            "Company analysis completed via shared core: ticker=%s "
-            "analysis_id=%s investment_score=%s risk_score=%s",
-            company.ticker,
-            analysis.analysis_id,
-            analysis.investment_score,
-            analysis.risk_score,
-        )
-        return AnalysisExecutionResult(
-            analysis=analysis,
-            score=score,
-            llm_output=llm_output,
-            context=context,
-            evidence_package=evidence_package,
-        )
+    # ── (orchestrator removed in Gate 6 — pipeline owns execution) ──
 
 
 def assert_completed_analysis_contract(analysis: Any) -> None:
@@ -335,11 +208,12 @@ def assert_completed_analysis_contract(analysis: Any) -> None:
         assert key in blob, f"llm_analysis.{key} missing"
 
 
-# ── Engine selection (PLAN.md Gate 5.1) ─────────────────────────
+# ── Engine selection (PLAN.md Gates 5.2/6) ──────────────────────
 #
 # Single dispatch point: BOTH production entry points (API wrapper and
-# scheduled-worker wrapper) call execute_company_analysis(); neither reads
-# ANALYSIS_ENGINE itself, so a flag flip switches both simultaneously.
+# scheduled-worker wrapper) call execute_company_analysis(), which routes
+# exclusively through the framework path. The legacy ANALYSIS_ENGINE flag
+# and legacy orchestrator were removed after Gate 6 (rollback = git revert).
 
 # Test seams — monkeypatch these to fake the framework path without LLM quota.
 _framework_pipeline_factory = None  # set lazily; see _build_framework_pipeline
@@ -413,19 +287,27 @@ async def _execute_framework(
         "risks": result.risks,
         "confidence": result.confidence,
         "recommendation": result.recommendation,
-        "evidence": {
-            "evidence_sources": [
-                {
-                    "source_type": e.source_type,
-                    "source_name": e.source_name,
-                    "metric": e.metric,
-                    "value": e.value,
-                    "period": e.period,
-                }
-                for e in result.evidence
-            ],
-            "source_count": len(result.evidence),
-        },
+        # §32: the LLM's source-backed claims drive AnalysisSource rows.
+        "source_backed_claims": meta_src.get("source_backed_claims", []),
+        "evidence": (
+            # Prefer the LLM-attributed evidence package (RAG-cited sources
+            # registered via §32); fall back to the evidence stage's
+            # provider-sourced evidence.
+            meta_src.get("llm_evidence")
+            or {
+                "evidence_sources": [
+                    {
+                        "source_type": e.source_type,
+                        "source_name": e.source_name,
+                        "metric": e.metric,
+                        "value": e.value,
+                        "period": e.period,
+                    }
+                    for e in result.evidence
+                ],
+                "source_count": len(result.evidence),
+            }
+        ),
         "_meta": {
             "model": meta_src.get("llm_model"),
             "provider": meta_src.get("llm_provider"),
@@ -440,9 +322,7 @@ async def _execute_framework(
     # drift between engines (PLAN.md: one persisted contract). Only the
     # persistence stage is reused; context/LLM stages belong to the pipeline.
     snapshots = meta_src.get("domain_snapshots") or {}
-    service = CompanyAnalysisService(
-        session, context_builder=None, llm_service=None
-    )
+    service = CompanyAnalysisService(session)
     analysis = await service.persist_analysis(
         company=company,
         context={
@@ -468,46 +348,20 @@ async def execute_company_analysis(
     session: AsyncSession,
     company: Company,
     *,
-    legacy_service: CompanyAnalysisService | None = None,
     existing: Analysis | None = None,
-    include_news: bool = True,
-    include_fundamentals: bool = True,
-    include_technical: bool = True,
-    include_macro: bool = True,
     on_stage: StageCallback | None = None,
-    engine: str | None = None,
     score_loader=None,
 ) -> AnalysisExecutionResult:
     """THE production dispatch point for company analysis.
 
-    Reads ``ANALYSIS_ENGINE`` (default legacy) exactly once so both entry
-    points always agree on the active engine (Gate 5.1).
+    Gate 6: Framework is the only production analysis engine.
+    Both entry points (API + scheduled worker) route through here.
     """
-    if engine is None:
-        from app.domains.stock.config import get_stock_config
-
-        engine = get_stock_config().ANALYSIS_ENGINE
-
-    if engine == "framework":
-        return await _execute_framework(
-            session,
-            company,
-            existing=existing,
-            on_stage=on_stage,
-            score_loader=score_loader,
-        )
-
-    if legacy_service is None:
-        raise ValueError(
-            "legacy engine selected but no CompanyAnalysisService supplied"
-        )
-    return await legacy_service.execute(
-        company=company,
+    return await _execute_framework(
+        session,
+        company,
         existing=existing,
-        include_news=include_news,
-        include_fundamentals=include_fundamentals,
-        include_technical=include_technical,
-        include_macro=include_macro,
         on_stage=on_stage,
+        score_loader=score_loader,
     )
 

@@ -110,7 +110,7 @@ async def _capture_embeddings(session, ticker: str) -> dict:
     from sqlalchemy import func, select
 
     from app.core.config import get_settings
-    from app.domains.stock.models.analysis import Embedding
+    from app.intelligence.models import Embedding  # framework-owned ORM
 
     ticker_filter = Embedding.content.ilike(f"%{ticker.upper()}%")
     embedded_result = await session.execute(
@@ -125,12 +125,22 @@ async def _capture_embeddings(session, ticker: str) -> dict:
     )
     type_counts = {row[0]: int(row[1]) for row in by_type.all()}
 
+    # Generic identity (Gate 4.2): every embedded row must carry a domain,
+    # and — until another domain exists — everything is "stock".
+    by_domain = await session.execute(
+        select(Embedding.domain, func.count())
+        .where(ticker_filter)
+        .group_by(Embedding.domain)
+    )
+    domain_counts = {row[0]: int(row[1]) for row in by_domain.all()}
+
     settings = get_settings()
     return {
         "document_count": embedded_count,
         "embedded_count": embedded_count,
         "vector_dimension": settings.EMBEDDING_DIMENSIONS,
         "by_entity_type": type_counts,
+        "by_domain": domain_counts,
     }
 
 

@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.stock.config import get_stock_config
@@ -159,12 +159,16 @@ class BacktestEngine:
         description: str | None = None,
         tickers: list[str] | None = None,
         created_by: str | None = None,
+        user_id: int | None = None,
     ) -> BacktestSnapshot:
         """
         Build a point-in-time dataset snapshot (Section 162).
 
         Captures prices, scores, fundamentals, events, and news as of a
         specific date. This prevents look-ahead bias in backtesting.
+
+        ``user_id`` records the owning user (``None`` = global/system, e.g. the
+        scheduler's daily snapshot). Snapshot visibility is scoped by owner.
         """
         # Resolve companies
         company_query = select(Company)
@@ -224,6 +228,7 @@ class BacktestEngine:
             scores=scores,
             source_data_version=f"snapshot_{as_of.strftime('%Y%m%d')}",
             created_by=created_by,
+            user_id=user_id,
         )
         self.session.add(snapshot)
         await commit_session(self.session)
@@ -300,6 +305,7 @@ class BacktestEngine:
         tickers: list[str] | None = None,
         snapshot_id: int | None = None,
         existing_run: BacktestRun | None = None,
+        user_id: int | None = None,
     ) -> BacktestRun:
         """
         Execute a strategy backtest (Section 162).
@@ -345,6 +351,7 @@ class BacktestEngine:
                 snapshot_id=snapshot_id,
                 scoring_model=settings.SCORING_MODEL,
                 scoring_version=settings.SCORING_VERSION,
+                user_id=user_id,
             )
             self.session.add(run)
             await self.session.flush()
@@ -1546,18 +1553,33 @@ class BacktestEngine:
 
     # ── Query helpers ─────────────────────────────────────────────
 
-    async def get_run(self, run_id: int) -> BacktestRun | None:
-        """Get a backtest run by ID."""
-        return await self.session.get(BacktestRun, run_id)
+    async def get_run(
+        self, run_id: int, owner_id: int | None = None
+    ) -> BacktestRun | None:
+        """Get a backtest run by ID.
 
-    async def list_runs(self, limit: int = 20, offset: int = 0) -> list[BacktestRun]:
-        """List backtest runs."""
-        result = await self.session.execute(
-            select(BacktestRun)
-            .order_by(desc(BacktestRun.created_at))
-            .offset(offset)
-            .limit(limit)
-        )
+        When ``owner_id`` is provided (a scoped requester), only a run owned
+        by that user is returned; otherwise ``None`` (→ 404).
+        """
+        stmt = select(BacktestRun).where(BacktestRun.id == run_id)
+        if owner_id is not None:
+            stmt = stmt.where(BacktestRun.user_id == owner_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_runs(
+        self, limit: int = 20, offset: int = 0, owner_id: int | None = None
+    ) -> list[BacktestRun]:
+        """List backtest runs.
+
+        When ``owner_id`` is provided (a scoped requester), only runs owned by
+        that user are returned. Runs are private per-owner.
+        """
+        stmt = select(BacktestRun)
+        if owner_id is not None:
+            stmt = stmt.where(BacktestRun.user_id == owner_id)
+        stmt = stmt.order_by(desc(BacktestRun.created_at)).offset(offset).limit(limit)
+        result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
     async def get_result(self, run_id: int) -> BacktestResult | None:
@@ -1609,17 +1631,42 @@ class BacktestEngine:
         return list(result.scalars().all())
 
     async def list_snapshots(
-        self, limit: int = 20, offset: int = 0
+        self, limit: int = 20, offset: int = 0, owner_id: int | None = None
     ) -> list[BacktestSnapshot]:
-        """List backtest snapshots."""
-        result = await self.session.execute(
-            select(BacktestSnapshot)
-            .order_by(desc(BacktestSnapshot.as_of))
-            .offset(offset)
-            .limit(limit)
-        )
+        """List backtest snapshots.
+
+        When ``owner_id`` is provided (a scoped requester), only snapshots the
+        user owns **plus** global/system ones (``user_id IS NULL``, e.g. the
+        scheduler's daily snapshot) are returned — never another user's private
+        snapshots.
+        """
+        stmt = select(BacktestSnapshot)
+        if owner_id is not None:
+            stmt = stmt.where(
+                or_(
+                    BacktestSnapshot.user_id == owner_id,
+                    BacktestSnapshot.user_id.is_(None),
+                )
+            )
+        stmt = stmt.order_by(desc(BacktestSnapshot.as_of)).offset(offset).limit(limit)
+        result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_snapshot(self, snapshot_id: int) -> BacktestSnapshot | None:
-        """Get a backtest snapshot by ID."""
-        return await self.session.get(BacktestSnapshot, snapshot_id)
+    async def get_snapshot(
+        self, snapshot_id: int, owner_id: int | None = None
+    ) -> BacktestSnapshot | None:
+        """Get a backtest snapshot by ID.
+
+        When ``owner_id`` is provided (a scoped requester), only a snapshot the
+        user owns, or a global/system one (``user_id IS NULL``), is returned.
+        """
+        stmt = select(BacktestSnapshot).where(BacktestSnapshot.id == snapshot_id)
+        if owner_id is not None:
+            stmt = stmt.where(
+                or_(
+                    BacktestSnapshot.user_id == owner_id,
+                    BacktestSnapshot.user_id.is_(None),
+                )
+            )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()

@@ -14,32 +14,23 @@ The domain knows WHAT intelligence means.
 
 ⚠️  INTEGRATION STATUS — READ BEFORE EDITING:
 
-    Phase 9: this pipeline is now a **fully functional generic
-    orchestrator** — injectable services with framework defaults,
-    entity-resolution stage, evidence via the evidence core, validation,
-    and optional-capability scoring (verified by
-    tests/framework/test_pipeline.py).
+    Gates 5.2/6 (docs/PLAN.md): this pipeline is now **the production
+    analysis engine** for BOTH entry points. Every company analysis runs::
 
-    It is still NOT wired into the production analysis execution path.
-    Nothing instantiates ``IntelligencePipeline`` in production and no
-    production code calls ``run()``. Per plan §9.6, switch over only
-    after the golden comparison passes:
+        api/analysis.py / workers/analysis_worker.py
+            → services/company_analysis.execute_company_analysis()
+            → build_stock_pipeline() → IntelligencePipeline.run()
 
-        production path  → baseline_aapl.json
-        pipeline.run()   → pipeline_aapl.json
-
-    Production company analysis currently runs through::
-
-        api/analysis.py / analysis_worker.py
-            → InvestmentScoringEngine (scoring/investment_scoring.py)
-
-    Do not assume changes here affect production analysis until the
-    pipeline is explicitly integrated (future architecture task: decide
-    whether it replaces, wraps, or orchestrates InvestmentScoringEngine).
+    Domain providers implement the generic ``fetch(entity_ref)`` protocol
+    (returning {"kind": <type>, "data": <payload>} dicts) so the generic
+    ingestion stage collects observations; the domain ContextBuilder turns
+    them into IntelligenceContext snapshots for the LLM stage.
 
     Related deliberate decisions already encoded in this file:
       * ``_ingest`` treats providers lacking ``fetch(entity_ref)`` as an
         expected no-op (worker-owned ingestion), not an error.
+      * ``_ingest`` extracts ``kind``/``data`` from protocol-style dicts;
+        plain dicts (legacy providers) pass through unchanged.
 """
 
 from __future__ import annotations
@@ -269,6 +260,12 @@ class IntelligencePipeline:
                     # without re-running the context stage (PLAN.md: one
                     # persisted contract across engines).
                     "domain_snapshots": dict(context.domain_snapshots),
+                    # §32 source-backed claims + the LLM-attributed evidence
+                    # package ride along so the canonical writer can persist
+                    # AnalysisSource rows and RAG-backed evidence without
+                    # re-running the LLM stage (one persisted contract).
+                    "source_backed_claims": llm_output.get("source_backed_claims", []),
+                    "llm_evidence": llm_output.get("evidence", {}),
                 },
                 created_at=datetime.now(timezone.utc),
             )
@@ -371,14 +368,28 @@ class IntelligencePipeline:
             try:
                 raw_data = await provider.fetch(request.entity_ref)
                 for item in raw_data:
-                    all_observations.append(
-                        Observation(
-                            entity_ref=request.entity_ref,
-                            observed_at=datetime.now(timezone.utc),
-                            data=item,
-                            source=name,
+                    # Providers following the generic protocol return
+                    # {"kind": <type>, "data": <payload>} dicts; plain dicts
+                    # (legacy providers) are kept as-is with no kind.
+                    if isinstance(item, dict) and "kind" in item and "data" in item:
+                        all_observations.append(
+                            Observation(
+                                entity_ref=request.entity_ref,
+                                observed_at=datetime.now(timezone.utc),
+                                data=item["data"],
+                                source=name,
+                                kind=item["kind"],
+                            )
                         )
-                    )
+                    else:
+                        all_observations.append(
+                            Observation(
+                                entity_ref=request.entity_ref,
+                                observed_at=datetime.now(timezone.utc),
+                                data=item,
+                                source=name,
+                            )
+                        )
                 logger.debug(
                     "Provider '%s' returned %d records", name, len(raw_data)
                 )

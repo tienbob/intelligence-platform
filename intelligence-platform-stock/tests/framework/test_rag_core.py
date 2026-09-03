@@ -116,11 +116,29 @@ def test_numeric_min_filter_uses_coalesce():
 
 def test_legacy_dict_roundtrip():
     d = doc(7, 0.88, metadata={"company_id": "123"})
+    d.domain = "stock"
     legacy = d.to_legacy_dict()
-    assert set(legacy) == {"id", "entity_type", "entity_id", "content",
+    assert set(legacy) == {"id", "domain", "entity_type", "entity_id", "content",
                            "metadata", "similarity"}
     back = RetrievedDocument.from_legacy_dict(legacy)
     assert back.id == d.id and back.score == 0.88
+    assert back.domain == "stock"
+
+
+def test_domain_filter_builds_sql():
+    sql, params = build_filter_sql(RetrievalFilters(domains=["stock"]))
+    assert "domain = :f_dom_0" in sql
+    assert params["f_dom_0"] == "stock"
+
+    sql2, params2 = build_filter_sql(
+        RetrievalFilters(domains=["stock"], entity_types=["news"])
+    )
+    assert "domain = :f_dom_0" in sql2 and "entity_type = :f_type_1" in sql2
+
+
+def test_domain_filter_makes_filters_non_empty():
+    assert RetrievalFilters().is_empty() is True
+    assert RetrievalFilters(domains=["stock"]).is_empty() is False
 
 
 def test_malformed_metadata_tolerated():

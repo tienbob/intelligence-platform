@@ -27,34 +27,40 @@ from app.domains.stock.schemas.analysis import (
     ConfidenceBreakdown,
     InvestmentRecommendation,
 )
-from app.domains.stock.scoring.context_builder import ContextBuilder
-from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
-from app.domains.stock.scoring.evidence import EvidenceAttributor
-from app.domains.stock.scoring.llm import LLMService
 from app.domains.stock.services.company_analysis import execute_company_analysis
+from app.shared.identity import (
+    company_is_scoped,
+    requester_scope,
+    scoped_where,
+)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 @router.get("/jobs")
 async def list_analysis_jobs(
+    request: Request,
     limit: int = Query(default=20, le=100),
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List analysis jobs with status."""
+    """List analysis jobs with status — scoped to the requesting user's companies."""
     from sqlalchemy import func
 
-    result = await db.execute(
+    scope = await requester_scope(request, db)
+
+    query = (
         select(Analysis, Company.ticker)
         .join(Company, Company.id == Analysis.company_id)
-        .order_by(Analysis.created_at.desc())
-        .offset(offset)
-        .limit(limit)
     )
+    query = scoped_where(query, Analysis.company_id, scope)
+    query = query.order_by(Analysis.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(query)
     rows = result.all()
 
-    total = (await db.execute(select(func.count(Analysis.id)))).scalar() or 0
+    count_query = select(func.count(Analysis.id))
+    count_query = scoped_where(count_query, Analysis.company_id, scope)
+    total = (await db.execute(count_query)).scalar() or 0
 
     jobs = []
     for analysis, ticker in rows:
@@ -85,14 +91,13 @@ async def run_company_analysis(
     """
     Background task for POST /analysis/company.
 
-    Thin entry-point wrapper: all contract-producing steps live in the
-    shared ``CompanyAnalysisService``. This wrapper owns only what is
-    entry-point-specific — loading the pre-created row, reporting stage
-    transitions to the polling frontend, and marking failures.
+    Gate 6: Analysis execution delegated to the framework path via
+    execute_company_analysis(). This wrapper owns only API-specific
+    concerns — loading the pre-created row, reporting stage transitions
+    to the polling frontend, and marking failures.
     """
     from app.core.database import async_session_factory
     from app.core.logging import get_logger
-    from app.domains.stock.services.company_analysis import CompanyAnalysisService
 
     logger = get_logger(__name__)
 
@@ -122,22 +127,10 @@ async def run_company_analysis(
                 analysis.status = name
                 await session.commit()
 
-            service = CompanyAnalysisService(
-                session,
-                context_builder=ContextBuilder(session),
-                llm_service=LLMService(),
-                evidence_attributor_factory=EvidenceAttributor,
-                scoring_engine_factory=lambda s: InvestmentScoringEngine(s),
-            )
             await execute_company_analysis(
                 session,
                 company,
-                legacy_service=service,
                 existing=analysis,
-                include_news=include_news,
-                include_fundamentals=include_fundamentals,
-                include_technical=include_technical,
-                include_macro=include_macro,
                 on_stage=_stage,
             )
 
@@ -160,20 +153,28 @@ async def create_company_analysis(
     db: AsyncSession = Depends(get_db),
     fastapi_request: Request = None,
 ):
-    """Create a company analysis job (Section 46)."""
+    """Create a company analysis job (Section 46) — scoped per requesting user."""
     # Idempotency check (Architecture §101)
     idempotency_key = await check_idempotency(fastapi_request)
 
-    # Verify company exists — auto-ingest if not tracked yet
+    scope = await requester_scope(fastapi_request, db)
+
+    # Verify company exists — auto-ingest only for unscoped callers
     result = await db.execute(
         select(Company).where(Company.ticker == request.ticker.upper())
     )
     company = result.scalar_one_or_none()
     if not company:
-        from app.domains.stock.api.v1.stocks import _auto_ingest_ticker
+        if scope is not None:
+            # Scoped users cannot summon companies they were not granted.
+            raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
+        from app.domains.stock.api.stocks import _auto_ingest_ticker
         company = await _auto_ingest_ticker(request.ticker, db)
         if not company:
             raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
+
+    if not company_is_scoped(company.id, scope):
+        raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
 
     analysis_id = str(uuid.uuid4())
     analysis = Analysis(
@@ -207,13 +208,21 @@ async def create_company_analysis(
 
 
 @router.delete("/{analysis_id}")
-async def delete_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
-    """Cancel or delete an analysis job."""
+async def delete_analysis(
+    analysis_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel or delete an analysis job — scoped to the requesting user."""
     result = await db.execute(
         select(Analysis).where(Analysis.analysis_id == analysis_id)
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    scope = await requester_scope(request, db)
+    if not company_is_scoped(analysis.company_id, scope):
         raise HTTPException(status_code=404, detail="Analysis not found")
 
     active_statuses = {"queued", "collecting_data", "calculating_metrics", "retrieving_context", "llm_analysis", "risk_analysis"}
@@ -229,13 +238,21 @@ async def delete_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
-    """Get analysis status and results (Section 46)."""
+async def get_analysis(
+    analysis_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get analysis status and results (Section 46) — scoped per requesting user."""
     result = await db.execute(
         select(Analysis).where(Analysis.analysis_id == analysis_id)
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    scope = await requester_scope(request, db)
+    if not company_is_scoped(analysis.company_id, scope):
         raise HTTPException(status_code=404, detail="Analysis not found")
 
     # Get ticker

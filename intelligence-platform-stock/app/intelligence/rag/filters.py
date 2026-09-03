@@ -32,6 +32,11 @@ def build_filter_sql(
     params: dict[str, Any] = {}
     i = param_offset
 
+    for domain in filters.domains:
+        sql_parts.append(f"domain = :f_dom_{i}")
+        params[f"f_dom_{i}"] = domain
+        i += 1
+
     for entity_type in filters.entity_types:
         sql_parts.append(f"entity_type = :f_type_{i}")
         params[f"f_type_{i}"] = entity_type

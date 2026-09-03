@@ -23,11 +23,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.domains.stock.models.analysis import Analysis, Embedding
+from app.domains.stock.models.analysis import Analysis
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.event import MarketEvent
 from app.domains.stock.models.news import CompanyNews, News
 from app.intelligence.embeddings import (
+    Embedding,  # framework-owned ORM — consumed via contract, not defined here
     EmbeddingClient,
     GenericEmbeddingService,
     PgVectorStore,
@@ -126,6 +127,7 @@ class EmbeddingService:
         """
 
         metadata: dict[str, Any] = {
+            "domain": "stock",
             "entity_type": entity_type,
             "entity_id": entity_id,
         }
@@ -185,13 +187,14 @@ class EmbeddingService:
 
         from app.intelligence.embeddings.types import VectorRecord
 
-        store = PgVectorStore(
-            Embedding,
-            self.dimensions,
-            self.model,
-        )
+        # ``PgVectorStore()`` resolves to the framework-owned Embedding ORM
+        # (``app.intelligence.models.Embedding``) and to the platform
+        # EMBEDDING_DIMENSIONS/EMBEDDING_MODEL settings — Stock consumes the
+        # table through the framework contract instead of owning it.
+        store = PgVectorStore()
 
         record = VectorRecord(
+            domain="stock",
             entity_type=entity_type,
             entity_id=entity_id,
             content=content,
@@ -271,11 +274,9 @@ class EmbeddingIngestionService:
         """
 
         if self._generic is None:
-            pgvector_store = PgVectorStore(
-                Embedding,
-                self.embedding_service.dimensions,
-                self.embedding_service.model,
-            )
+            # Binds the generic engine to the framework-owned Embedding ORM
+            # (PgVectorStore() resolves the model + dimensions centrally).
+            pgvector_store = PgVectorStore()
 
             self._generic = GenericEmbeddingService(
                 store=pgvector_store.store,
@@ -296,8 +297,8 @@ class EmbeddingIngestionService:
         """
         Select source entities that do not yet have embeddings.
 
-        Uses the generic correlated NOT EXISTS filter so the same
-        entity is not embedded repeatedly.
+        Uses the generic correlated NOT EXISTS filter (scoped to
+        domain="stock") so the same entity is not embedded repeatedly.
         """
 
         result = await self.session.execute(
@@ -307,6 +308,7 @@ class EmbeddingIngestionService:
                     Embedding,
                     model,
                     entity_type,
+                    domain="stock",
                 )
             )
             .limit(limit)
@@ -372,6 +374,7 @@ class EmbeddingIngestionService:
 
         records = [
             VectorRecord(
+                domain="stock",
                 entity_type=entity_type,
                 entity_id=entity_id,
                 content=content,

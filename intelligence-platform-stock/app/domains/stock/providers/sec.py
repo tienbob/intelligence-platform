@@ -54,6 +54,34 @@ class SECProvider(FundamentalDataProvider):
         # SEC doesn't use API key params
         return {k: v for k, v in kwargs.items() if v is not None}
 
+    # -- Generic Provider Protocol (Section 6) ----------------------
+
+    async def fetch(self, entity_ref) -> list[dict[str, Any]]:
+        """Generic fetch -- returns observations with ``kind`` fields."""
+        ticker = entity_ref.entity_id
+        results: list[dict[str, Any]] = []
+
+        try:
+            income = await self.get_income_statement(ticker)
+            results.append({"kind": "financials", "data": income})
+        except Exception:
+            logger.warning("SEC get_income_statement failed for %s", ticker, exc_info=True)
+
+        try:
+            balance = await self.get_balance_sheet(ticker)
+            results.append({"kind": "balance_sheet", "data": balance})
+        except Exception:
+            logger.warning("SEC get_balance_sheet failed for %s", ticker, exc_info=True)
+
+        try:
+            cash = await self.get_cash_flow(ticker)
+            results.append({"kind": "cash_flow", "data": cash})
+        except Exception:
+            logger.warning("SEC get_cash_flow failed for %s", ticker, exc_info=True)
+
+        return results
+
+
     # ── Company / CIK resolution ─────────────────────────────────
 
     async def _resolve_ticker_to_cik(self, ticker: str) -> str:
@@ -70,7 +98,7 @@ class SECProvider(FundamentalDataProvider):
         import httpx
         client = await self._get_client()
         response = await client.get(
-            f"{self.base_url}/files/company/tickers.json",
+            "https://www.sec.gov/files/company_tickers.json",
             headers=self._get_headers(),
         )
         response.raise_for_status()

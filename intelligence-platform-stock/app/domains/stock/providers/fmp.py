@@ -59,6 +59,51 @@ class FMPProvider(FundamentalDataProvider, MarketDataProvider):
             params["apikey"] = self.api_key
         return params
 
+    # ── Generic Provider Protocol (Section 6) ──────────────────────
+
+    async def fetch(self, entity_ref) -> list[dict[str, Any]]:
+        """Generic fetch — returns observations with ``kind`` fields."""
+        ticker = entity_ref.entity_id
+        results: list[dict[str, Any]] = []
+
+        try:
+            quote = await self.get_quote(ticker)
+            results.append({"kind": "price_quote", "data": quote})
+        except Exception:
+            logger.warning("FMP get_quote failed for %s", ticker, exc_info=True)
+
+        try:
+            income = await self.get_income_statement(ticker)
+            results.append({"kind": "financials", "data": income})
+        except Exception:
+            logger.warning("FMP get_income_statement failed for %s", ticker, exc_info=True)
+
+        try:
+            balance = await self.get_balance_sheet(ticker)
+            results.append({"kind": "balance_sheet", "data": balance})
+        except Exception:
+            logger.warning("FMP get_balance_sheet failed for %s", ticker, exc_info=True)
+
+        try:
+            cash = await self.get_cash_flow(ticker)
+            results.append({"kind": "cash_flow", "data": cash})
+        except Exception:
+            logger.warning("FMP get_cash_flow failed for %s", ticker, exc_info=True)
+
+        try:
+            ratios = await self.get_ratios(ticker)
+            results.append({"kind": "ratios", "data": ratios})
+        except Exception:
+            logger.warning("FMP get_ratios failed for %s", ticker, exc_info=True)
+
+        try:
+            profile = await self.get_company_profile(ticker)
+            results.append({"kind": "profile", "data": profile})
+        except Exception:
+            logger.warning("FMP get_company_profile failed for %s", ticker, exc_info=True)
+
+        return results
+
     # ── FundamentalDataProvider ──────────────────────────────────
 
     async def get_income_statement(self, ticker: str) -> list[dict[str, Any]]:

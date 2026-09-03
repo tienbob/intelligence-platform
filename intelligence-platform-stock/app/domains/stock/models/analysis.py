@@ -3,11 +3,18 @@ Derived and AI-layer models (Sections 15).
 
 * ``TechnicalIndicator`` — SMA, EMA, RSI, MACD, etc. (derived)
 * ``AnomalyScore`` — market anomaly detection results (derived)
-* ``Embedding`` — pgvector embeddings for RAG (AI)
+* ``RiskMetric`` — risk metrics for each company (derived)
 * ``Analysis`` — full AI analysis with LLM output (AI)
 * ``InvestmentThesis`` — persisted investment theses (AI)
 * ``InvestmentScore`` — deterministic investment scores (AI)
 * ``AnalysisSource`` — source-backed AI claims (AI)
+
+.. note::
+   The ``Embedding`` ORM used to live here (``app/domains/stock/models/``);
+   it is **framework-owned** since Gate 4.2 and now lives in
+   ``app/intelligence/models/embeddings.py``. Stock consumes it through the
+   framework contract surface (``app.intelligence.embeddings``), never by
+   redefining it here.
 """
 
 from __future__ import annotations
@@ -28,37 +35,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from pgvector.sqlalchemy import Vector
-from pgvector.utils import Vector as PgVector
-
-from app.core.config import get_settings
 from app.core.database import Base
 from app.domains.stock.models.base import TimestampMixin
-
-settings = get_settings()
-
-
-class AsyncVector(Vector):
-    """
-    pgvector Vector type that passes values through to asyncpg's binary codec.
-
-    The stock ``Vector.bind_processor`` serializes the value to a text string
-    (``"[0.1, 0.2, ...]"``) before asyncpg sees it.  asyncpg's registered
-    binary codec (``register_vector``) then fails to encode that string as a
-    vector ("could not convert string to float").  This subclass overrides the
-    bind processor to return a ``pgvector.Vector`` object unchanged, so the
-    asyncpg binary codec receives the correct type.
-    """
-
-    def bind_processor(self, dialect):
-        def process(value):
-            if value is None:
-                return None
-            if not isinstance(value, PgVector):
-                value = PgVector(value)
-            return value
-
-        return process
 
 
 # ── Derived layer ────────────────────────────────────────────────
@@ -154,26 +132,6 @@ class RiskMetric(Base, TimestampMixin):
 
 
 # ── AI layer ─────────────────────────────────────────────────────
-
-
-class Embedding(Base, TimestampMixin):
-    """pgvector embedding for RAG retrieval (Section 28)."""
-
-    __tablename__ = "embeddings"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    entity_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    # pgvector column — matches migrations/versions/0002_embedding_vector.py
-    embedding: Mapped[list[float] | None] = mapped_column(
-        AsyncVector(settings.EMBEDDING_DIMENSIONS), nullable=True
-    )
-    embedding_model: Mapped[str] = mapped_column(String(100), default="text-embedding-3-small")
-    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
-
-    def __repr__(self) -> str:
-        return f"<Embedding(entity_type={self.entity_type!r}, entity_id={self.entity_id})>"
 
 
 class Analysis(Base, TimestampMixin):

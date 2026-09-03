@@ -313,7 +313,12 @@ class EventIntelligenceEngine:
                 description=news.title,
                 source_news_id=news.id,
             ).on_conflict_do_nothing(
-                index_elements=["company_id", "source_news_id","event_type"]
+                # Must match the uq_market_events_company_news constraint
+                # exactly — migration 0015 collapsed uniqueness from
+                # (company_id, source_news_id, event_type) down to just
+                # (company_id, source_news_id). An ON CONFLICT spec that
+                # matches no unique index aborts the whole transaction.
+                index_elements=["company_id", "source_news_id"]
             ).returning(MarketEvent.id)
 
             result = await self.session.execute(insert_stmt)

@@ -8,7 +8,7 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.domains.stock.models.stock_price import StockPrice
 from app.domains.stock.providers.fmp import FMPProvider
 from app.domains.stock.schemas.analysis import MarketOverview
 from app.domains.stock.scoring.macro_analysis import MacroAnalysisEngine
+from app.shared.identity import requester_scope, scoped_where
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
@@ -87,9 +88,28 @@ async def get_market_indices_data() -> dict[str, Any]:
         return {"indices": []}
 
 
+def _dedupe_market_events(events: list[MarketEvent]) -> list[MarketEvent]:
+    """Collapse the same market event fanned out across multiple company_id rows.
+
+    Shared/macro events (e.g. an index-wide headline) can be written once per
+    scoped company, so a multi-company scope may otherwise see the same
+    headline repeated. Keep the first occurrence per (description, date, type).
+    """
+    seen: dict[tuple[str, Any, str], MarketEvent] = {}
+    for e in events:
+        key = (e.description, e.event_date, e.event_type)
+        if key not in seen:
+            seen[key] = e
+    return list(seen.values())
+
+
 @router.get("/overview", response_model=MarketOverview)
-async def get_market_overview(db: AsyncSession = Depends(get_db)):
-    """Get market overview (Section 47)."""
+async def get_market_overview(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get market overview (Section 47) — scoped per requesting user."""
+    scope = await requester_scope(request, db)
     macro_engine = MacroAnalysisEngine(db)
     macro_snapshot = await macro_engine.get_macro_snapshot()
 
@@ -97,22 +117,21 @@ async def get_market_overview(db: AsyncSession = Depends(get_db)):
     indices_data = await get_market_indices_data()
     indices = indices_data.get("indices", [])
 
-    # Recent anomalies
-    anomaly_result = await db.execute(
-        select(AnomalyScore)
-        .where(AnomalyScore.triggered == True)  # noqa: E712
-        .order_by(desc(AnomalyScore.timestamp))
-        .limit(10)
-    )
+    # Recent anomalies (scoped to the user's companies)
+    anomaly_query = select(AnomalyScore).where(AnomalyScore.triggered == True)  # noqa: E712
+    anomaly_query = scoped_where(anomaly_query, AnomalyScore.company_id, scope)
+    anomaly_query = anomaly_query.order_by(desc(AnomalyScore.timestamp)).limit(10)
+    anomaly_result = await db.execute(anomaly_query)
     anomalies = anomaly_result.scalars().all()
 
-    # Recent major events
-    event_result = await db.execute(
-        select(MarketEvent)
-        .order_by(desc(MarketEvent.event_date))
-        .limit(10)
-    )
-    events = event_result.scalars().all()
+    # Recent major events (scoped to the user's companies).
+    # Pull a wider window than we need, since deduping fanned-out events can
+    # collapse several rows into one — then trim to the top 10 after dedup.
+    event_query = select(MarketEvent)
+    event_query = scoped_where(event_query, MarketEvent.company_id, scope)
+    event_query = event_query.order_by(desc(MarketEvent.event_date)).limit(30)
+    event_result = await db.execute(event_query)
+    events = _dedupe_market_events(event_result.scalars().all())[:10]
 
     # VIX for volatility assessment
     vix_result = await db.execute(
@@ -204,18 +223,16 @@ async def get_market_indices():
 
 
 @router.get("/top-movers")
-async def get_top_movers(db: AsyncSession = Depends(get_db)):
-    """Get top daily movers from stock prices with real price/change/volume data."""
+async def get_top_movers(request: Request, db: AsyncSession = Depends(get_db)):
+    """Get top daily movers from stock prices — scoped per requesting user."""
+    scope = await requester_scope(request, db)
     # Get latest price for each company
-    subq = (
-        select(
-            StockPrice.company_id,
-            func.max(StockPrice.timestamp).label("max_ts"),
-        )
-        .where(StockPrice.interval == "1d")
-        .group_by(StockPrice.company_id)
-        .subquery()
-    )
+    latest_price_query = select(
+        StockPrice.company_id,
+        func.max(StockPrice.timestamp).label("max_ts"),
+    ).where(StockPrice.interval == "1d")
+    latest_price_query = scoped_where(latest_price_query, StockPrice.company_id, scope)
+    subq = latest_price_query.group_by(StockPrice.company_id).subquery()
 
     latest = (
         select(StockPrice, Company.ticker, Company.name)

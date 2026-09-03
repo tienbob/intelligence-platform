@@ -72,6 +72,20 @@ class FREDProvider(MacroDataProvider):
         params["file_type"] = "json"
         return params
 
+    # -- Generic Provider Protocol (Section 6) ----------------------
+
+    async def fetch(self, entity_ref) -> list[dict[str, Any]]:
+        """Generic fetch -- returns macro observations (entity-independent)."""
+        results: list[dict[str, Any]] = []
+        for name in FRED_SERIES:
+            try:
+                obs = await self.get_indicator(name)
+                results.append({"kind": "macro", "data": obs[-5:] if obs else []})
+            except Exception:
+                logger.warning("FRED get_indicator(%s) failed", name, exc_info=True)
+        return results
+
+
     async def get_indicator(self, indicator_id: str) -> list[dict[str, Any]]:
         """
         Get all observations for a FRED series.

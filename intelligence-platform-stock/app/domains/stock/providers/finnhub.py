@@ -54,6 +54,40 @@ class FinnhubProvider(
             params["token"] = self.api_key
         return params
 
+    # -- Generic Provider Protocol (Section 6) ----------------------
+
+    async def fetch(self, entity_ref) -> list[dict[str, Any]]:
+        """Generic fetch -- returns observations with ``kind`` fields."""
+        ticker = entity_ref.entity_id
+        results: list[dict[str, Any]] = []
+
+        try:
+            quote = await self.get_quote(ticker)
+            results.append({"kind": "price_quote", "data": quote})
+        except Exception:
+            logger.warning("Finnhub get_quote failed for %s", ticker, exc_info=True)
+
+        try:
+            news = await self.get_company_news(ticker, limit=20)
+            results.append({"kind": "news", "data": news})
+        except Exception:
+            logger.warning("Finnhub get_company_news failed for %s", ticker, exc_info=True)
+
+        try:
+            insider = await self.get_insider_transactions(ticker)
+            results.append({"kind": "insider", "data": insider})
+        except Exception:
+            logger.warning("Finnhub get_insider_transactions failed for %s", ticker, exc_info=True)
+
+        try:
+            inst = await self.get_institutional_ownership(ticker)
+            results.append({"kind": "institutional", "data": inst})
+        except Exception:
+            logger.warning("Finnhub get_institutional_ownership failed for %s", ticker, exc_info=True)
+
+        return results
+
+
     # ── AlternativeDataProvider ──────────────────────────────────
 
     async def get_insider_transactions(self, ticker: str) -> list[dict[str, Any]]:

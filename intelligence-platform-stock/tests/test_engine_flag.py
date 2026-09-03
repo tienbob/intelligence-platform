@@ -1,8 +1,8 @@
-"""Gate 5.1 — ANALYSIS_ENGINE flag (docs/PLAN.md §5.1).
+"""Gate 5.1 — Framework is the production analysis engine (docs/PLAN.md §5.1).
 
-Both production entry points route through execute_company_analysis(), the
-single reader of the flag; flipping it must switch BOTH, and each engine must
-satisfy the canonical persisted contract. Fakes only — no LLM quota.
+Both production entry points route through execute_company_analysis(), which
+always delegates to the framework path (Gate 6 cleanup removed legacy fallback).
+Fakes only — no LLM quota.
 """
 
 from __future__ import annotations
@@ -101,29 +101,14 @@ def _install_framework_fake(monkeypatch):
     return pipe, loader
 
 
-# ── Flag routing ─────────────────────────────────────────────────
-
-
-def test_legacy_engine_routes_to_service(monkeypatch):
-    calls = {}
-
-    class _Svc:
-        async def execute(self, *, company, **kw):
-            calls["ran"] = company.ticker
-            return SimpleNamespace(analysis=SimpleNamespace(status="completed"))
-
-    res = asyncio.run(ca.execute_company_analysis(
-        None, _FakeCompany(), legacy_service=_Svc(), engine="legacy",
-    ))
-    assert calls["ran"] == TICKER
-    assert res.analysis.status == "completed"
+# ── Framework routing ──────────────────────────────────────────
 
 
 def test_framework_engine_routes_to_pipeline(monkeypatch):
     pipe, loader = _install_framework_fake(monkeypatch)
     session = _PersistSession()
     res = asyncio.run(ca.execute_company_analysis(
-        session, _FakeCompany(), engine="framework", score_loader=loader,
+        session, _FakeCompany(), score_loader=loader,
     ))
     assert pipe.requests and pipe.requests[0].entity_ref.entity_id == TICKER
     assert res.analysis.investment_score == 71.5
@@ -131,33 +116,9 @@ def test_framework_engine_routes_to_pipeline(monkeypatch):
     ca.assert_completed_analysis_contract(res.analysis)
 
 
-def test_flag_flip_switches_engine(monkeypatch):
-    """PLAN.md §5.1: legacy→framework AND framework→legacy, repeatedly."""
-    ran = []
-    pipe, loader = _install_framework_fake(monkeypatch)
-
-    class _Svc:
-        async def execute(self, *, company, **kw):
-            ran.append("legacy")
-            return SimpleNamespace(analysis=None)
-
-    async def go(engine):
-        await ca.execute_company_analysis(
-            _PersistSession(), _FakeCompany(),
-            legacy_service=_Svc(), engine=engine, score_loader=loader,
-        )
-
-    asyncio.run(go("legacy"))
-    asyncio.run(go("framework"))
-    asyncio.run(go("legacy"))
-    asyncio.run(go("framework"))
-    assert ran == ["legacy", "legacy"]          # service used twice
-    assert len(pipe.requests) == 2              # pipeline used twice
-
-
-def test_both_wrappers_respect_framework_flag(monkeypatch):
+def test_both_entry_points_use_framework(monkeypatch):
     """Entry-point neutrality: API-style (existing row + stages) and
-    worker-style (no row) both hit the pipeline when flag says framework."""
+    worker-style (no row) both hit the framework pipeline."""
     pipe, loader = _install_framework_fake(monkeypatch)
     existing = SimpleNamespace(analysis_id="x", id=9, status="collecting_data")
     stages = []
@@ -169,13 +130,13 @@ def test_both_wrappers_respect_framework_flag(monkeypatch):
         await ca.execute_company_analysis(
             _PersistSession(), _FakeCompany(),
             existing=existing, on_stage=on_stage,
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     async def worker_style():
         await ca.execute_company_analysis(
             _PersistSession(), _FakeCompany(),
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     asyncio.run(api_style())
@@ -210,4 +171,3 @@ def test_framework_failure_raises(monkeypatch):
 
 if __name__ == "__main__":
     print("run via pytest")
-

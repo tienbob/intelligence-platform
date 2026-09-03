@@ -43,6 +43,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Alembic migration 0016 references `users`, which is created by
+      # Rails migrations — so Python's migrate must run AFTER Rails'.
+      rails-migrate:
+        condition: service_completed_successfully
     command: bash scripts/migrate.sh
 
   python:

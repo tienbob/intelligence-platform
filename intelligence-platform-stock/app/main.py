@@ -38,6 +38,18 @@ async def lifespan(app: FastAPI):
 
     logger = get_logger(__name__)
 
+    # Fail loud if the configured EMBEDDING_DIMENSIONS doesn't match the DB's
+    # `embeddings.embedding` vector width (see database.verify_embedding_dimensions).
+    try:
+        from app.core.database import verify_embedding_dimensions
+
+        await verify_embedding_dimensions()
+    except RuntimeError:
+        raise  # dimension mismatch between config and schema — fatal
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Embedding-dimension pre-flight skipped: %s", exc)
+
+
     # Discover all domain modules
     registry = get_registry()
     logger.info(

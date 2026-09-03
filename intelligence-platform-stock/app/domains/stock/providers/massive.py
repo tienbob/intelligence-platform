@@ -21,6 +21,7 @@ from app.core.logging import get_logger
 from app.domains.stock.providers.base import (
     FundamentalDataProvider,
     MarketDataProvider,
+    NotEntitledError,
     NewsProvider,
 )
 
@@ -42,7 +43,7 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
             GET /stocks/financials/v1/income-statements
             GET /stocks/financials/v1/balance-sheets
             GET /stocks/financials/v1/cash-flow-statements
-    """
+        """
 
     provider_name = "massive"
     base_url = settings.MASSIVE_BASE_URL
@@ -50,6 +51,33 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
 
     def __init__(self, api_key: str | None = None):
         super().__init__(api_key or settings.MASSIVE_API_KEY)
+
+    # ── Generic Provider Protocol (Section 6) ──────────────────────
+
+    async def fetch(self, entity_ref) -> list[dict[str, Any]]:
+        """Generic fetch — returns observations with ``kind`` fields.
+
+        Called by the framework pipeline's generic ingestion stage for
+        ``POST /internal/analysis/company``.
+        """
+        ticker = entity_ref.entity_id
+        results: list[dict[str, Any]] = []
+
+        # Quote
+        try:
+            quote = await self.get_quote(ticker)
+            results.append({"kind": "price_quote", "data": quote})
+        except Exception:
+            logger.warning("Massive get_quote failed for %s", ticker, exc_info=True)
+
+        # News
+        try:
+            news = await self.get_company_news(ticker, limit=20)
+            results.append({"kind": "news", "data": news})
+        except Exception:
+            logger.warning("Massive get_company_news failed for %s", ticker, exc_info=True)
+
+        return results
 
     def _get_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -63,21 +91,28 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
     # ── MarketDataProvider ───────────────────────────────────────
 
     async def get_quote(self, ticker: str) -> dict[str, Any]:
-        """Get latest quote via snapshot endpoint."""
+        """Get the latest available close via the free aggregates endpoint."""
         data = await self._request(
             "GET",
-            f"/v2/snapshot/locale/us/markets/stocks/tickers/{ticker}",
+            f"/v2/aggs/ticker/{ticker}/prev",
             params=self._build_params(),
         )
-        snapshot = data.get("ticker", data)
+        result = (data.get("results") or [{}])[0]
         return {
             "ticker": ticker,
-            "price": snapshot.get("lastTrade", {}).get("p") or snapshot.get("close", 0),
-            "change": snapshot.get("todaysChange", 0),
-            "change_percent": snapshot.get("todaysChangePerc", 0),
-            "volume": snapshot.get("day", {}).get("v", 0),
-                "timestamp": self._normalize_timestamp(snapshot.get("updated")),
+            "price": result.get("c", 0),
+            "change": None,
+            "change_percent": None,
+            "volume": result.get("v", 0),
+            "timestamp": self._normalize_timestamp(result.get("t")),
         }
+
+    def _require_paid_endpoint(self) -> None:
+        if not settings.MASSIVE_ENABLE_PAID_ENDPOINTS:
+            raise NotEntitledError(
+                self.provider_name,
+                "Paid Massive endpoint disabled; use SEC for fundamentals",
+            )
 
     async def get_historical_prices(
         self,
@@ -128,6 +163,7 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
 
     async def get_market_movers(self) -> dict[str, list[dict[str, Any]]]:
         """Get top gainers and losers."""
+        self._require_paid_endpoint()
         gainers_data = await self._request(
             "GET",
             "/v2/snapshot/locale/us/markets/stocks/gainers",
@@ -202,6 +238,7 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
         
         Endpoint: GET /stocks/financials/v1/income-statements
         """
+        self._require_paid_endpoint()
         params = self._build_params(ticker=ticker)
         data = await self._request(
             "GET",
@@ -216,6 +253,7 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
         
         Endpoint: GET /stocks/financials/v1/balance-sheets
         """
+        self._require_paid_endpoint()
         params = self._build_params(ticker=ticker)
         data = await self._request(
             "GET",
@@ -230,6 +268,7 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
         
         Endpoint: GET /stocks/financials/v1/cash-flow-statements
         """
+        self._require_paid_endpoint()
         params = self._build_params(ticker=ticker)
         data = await self._request(
             "GET",

@@ -19,6 +19,7 @@ class RetrievedDocument:
     id: int | str
     content: str
     score: float  # cosine similarity (or fused keyword score for hybrid)
+    domain: str = ""
     entity_type: str = ""
     entity_id: int | str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -32,10 +33,12 @@ class RetrievedDocument:
         """
         Convert to the flat dict shape the Stock RAG service has always
         returned (id/entity_type/entity_id/content/metadata/similarity),
-        preserving backward compatibility for existing consumers.
+        preserving backward compatibility for existing consumers. ``domain``
+        is included (additive) so the generic identity round-trips.
         """
         return {
             "id": self.id,
+            "domain": self.domain,
             "entity_type": self.entity_type,
             "entity_id": self.entity_id,
             "content": self.content,
@@ -49,6 +52,7 @@ class RetrievedDocument:
             id=d["id"],
             content=d.get("content", ""),
             score=float(d.get("similarity", 0.0)),
+            domain=d.get("domain", ""),
             entity_type=d.get("entity_type", ""),
             entity_id=d.get("entity_id"),
             metadata=d.get("metadata") or {},
@@ -62,7 +66,7 @@ class RetrievalFilters:
     ``embeddings`` table.
 
     Generic vocabulary only:
-      - entity_types: which kinds of documents to include
+      - domains / entity_types: which documents to include (generic identity)
       - metadata_equals: exact matches on JSONB metadata fields
         (e.g. {"company_id": "123"} — values are cast to str)
       - metadata_min: minimum numeric value on JSONB metadata fields
@@ -70,6 +74,7 @@ class RetrievalFilters:
       - date_from / date_to: inclusive bounds on ``date_metadata_field``
     """
 
+    domains: list[str] = field(default_factory=list)
     entity_types: list[str] = field(default_factory=list)
     metadata_equals: dict[str, str] = field(default_factory=dict)
     metadata_min: dict[str, float] = field(default_factory=dict)
@@ -80,7 +85,8 @@ class RetrievalFilters:
     def is_empty(self) -> bool:
         """True when no constraint is set."""
         return not (
-            self.entity_types
+            self.domains
+            or self.entity_types
             or self.metadata_equals
             or self.metadata_min
             or self.date_from is not None

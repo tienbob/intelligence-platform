@@ -61,7 +61,11 @@ class Settings(BaseSettings):
     EMBEDDING_PROVIDER: str = "openai"
     EMBEDDING_API_KEY: Optional[str] = None
     EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSIONS: int = 1536
+    # Must match the `vector(N)` width of the embeddings table (migrations
+    # 0002/0009), otherwise INSERTs/writes of N-dim vectors fail at the
+    # DB layer. A startup check in database.py verifies this against the live
+    # schema on boot (see MIGRATION_FIX_PLAN.md §P3 / P1).
+    EMBEDDING_DIMENSIONS: int = 3072
 
     # ── Background Processing ────────────────────────────────────
     SCHEDULER_TIMEZONE: str = "UTC"

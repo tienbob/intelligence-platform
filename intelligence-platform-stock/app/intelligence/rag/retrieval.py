@@ -67,7 +67,7 @@ async def similarity_search(
 
     sql = """
         SELECT
-            id, entity_type, entity_id, content, metadata,
+            id, domain, entity_type, entity_id, content, metadata,
             1 - (embedding <=> :embedding) as similarity
         FROM embeddings
         WHERE 1 - (embedding <=> :embedding) > :threshold
@@ -90,6 +90,7 @@ async def similarity_search(
             id=row.id,
             content=row.content or "",
             score=float(row.similarity),
+            domain=row.domain or "",
             entity_type=row.entity_type or "",
             entity_id=row.entity_id,
             metadata=row.metadata or {},
@@ -120,7 +121,7 @@ async def keyword_search(
         )
         sql = f"""
             SELECT
-                id, entity_type, entity_id, content, metadata,
+                id, domain, entity_type, entity_id, content, metadata,
                 LEAST(
                     ({" + ".join(f"CASE WHEN content ILIKE :kw_{i} THEN 1 ELSE 0 END" for i in range(len(query_terms)))})
                     * 1.0 / GREATEST(SQRT(LENGTH(content)), 1) * 10.0,
@@ -135,7 +136,7 @@ async def keyword_search(
     else:
         sql = """
             SELECT
-                id, entity_type, entity_id, content, metadata,
+                id, domain, entity_type, entity_id, content, metadata,
                 0.5 as similarity
             FROM embeddings
             WHERE content ILIKE :keyword

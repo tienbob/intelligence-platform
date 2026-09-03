@@ -3,6 +3,11 @@ Analysis worker (Section 41).
 
 Daily: Recalculate investment scores
 On-demand: Full AI research analysis with evidence attribution
+
+Gate 6.2: Worker delegates analysis execution to the framework path.
+No legacy orchestration remains — scheduling, ticker selection, batching,
+retries, and per-ticker isolation live here; analysis execution is
+delegated to execute_company_analysis() which routes through the framework.
 """
 
 from __future__ import annotations
@@ -12,16 +17,10 @@ from app.core.logging import get_logger
 from app.domains.stock.models.analysis import Analysis
 from app.domains.stock.models.company import Company
 from app.domains.stock.scoring.analysis_validator import AnalysisValidationError
-from app.domains.stock.scoring.context_builder import ContextBuilder
-from app.domains.stock.scoring.evidence import EvidenceAttributor
-from app.domains.stock.scoring.llm import LLMService
-from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
-from app.domains.stock.services.company_analysis import (
-    CompanyAnalysisService,
-    execute_company_analysis,
-)
+from app.domains.stock.services.company_analysis import execute_company_analysis
 from app.domains.stock.scoring.risk import RiskEngine
 from app.domains.stock.scoring.technical_analysis import TechnicalAnalysisEngine
+from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
 from sqlalchemy import select
 
 logger = get_logger(__name__)
@@ -66,13 +65,13 @@ async def run_company_analysis(company_id: int) -> Analysis | None:
     """
     Run full AI research analysis for a company.
 
-    Thin entry-point wrapper: all contract-producing steps (context, LLM,
-    validation, deterministic scoring, persistence of the canonical Analysis
-    contract) live in ``CompanyAnalysisService`` — shared with the API path.
+    Gate 6.2: Worker delegates analysis execution to the framework path.
+    No legacy orchestration remains — this is a thin wrapper that owns only
+    worker-specific concerns (row lifecycle, error isolation). Analysis
+    execution is delegated to execute_company_analysis() which routes
+    through the framework per the ANALYSIS_ENGINE flag.
 
-    This variant runs without progress reporting (``on_stage=None``) and
-    creates one complete row at the end. Callers today: Gate 3's legacy
-    oracle and batch contexts. See docs/PLAN_ANALYSIS_CONTRACT.md.
+    See docs/PLAN_ANALYSIS_CONTRACT.md.
     """
     async with async_session_factory() as session:
         company = await session.get(Company, company_id)
@@ -81,15 +80,8 @@ async def run_company_analysis(company_id: int) -> Analysis | None:
             return None
 
         try:
-            service = CompanyAnalysisService(
-                session,
-                context_builder=ContextBuilder(session),
-                llm_service=LLMService(),
-                evidence_attributor_factory=EvidenceAttributor,
-                scoring_engine_factory=lambda s: InvestmentScoringEngine(s),
-            )
             result = await execute_company_analysis(
-                session, company, legacy_service=service
+                session, company
             )
             return result.analysis
 

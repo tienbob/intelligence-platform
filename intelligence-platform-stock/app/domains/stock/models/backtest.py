@@ -38,6 +38,9 @@ class BacktestRun(Base, TimestampMixin):
     __tablename__ = "backtest_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     # strategy: score_threshold | momentum | equal_weight | portfolio_optimizer
@@ -76,6 +79,9 @@ class BacktestSnapshot(Base, TimestampMixin):
     __tablename__ = "backtest_snapshots"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)

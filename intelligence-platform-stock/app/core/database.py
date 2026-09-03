@@ -87,6 +87,61 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def verify_embedding_dimensions() -> None:
+    """Fail loud on boot if the DB's ``embeddings.embedding`` vector width
+    disagrees with ``settings.EMBEDDING_DIMENSIONS``.
+
+    pgvector stores ``atttypmod`` == the declared dimension on a
+    ``vector(n)`` column, so comparing ``pg_attribute.atttypmod`` to the
+    configured width catches a dimension drift that would otherwise surface
+    only as opaque "vector must have N dimensions" errors at write time.
+
+    A missing ``embeddings`` table (fresh DB before migrations / CI) is
+    treated as non-fatal — the check only trips when the column exists but
+    is the wrong width. See MIGRATION_FIX_PLAN.md §P1.
+
+    Async: runs through the async engine directly. (The previous sync-engine
+    implementation raised ``MissingGreenlet`` against the asyncpg engine and
+    was silently swallowed by callers — Gate 4.2 fixed that so the mismatch
+    actually surfaces instead of being skipped at boot.)
+    """
+    from sqlalchemy import text
+
+    expected = settings.EMBEDDING_DIMENSIONS
+
+    async with engine.connect() as conn:
+        has_table = (
+            await conn.execute(text("SELECT to_regclass('embeddings') IS NOT NULL"))
+        ).scalar()
+        if not has_table:
+            logger.warning(
+                "embeddings table not found; skipping EMBEDDING_DIMENSIONS check "
+                "(likely a fresh DB / test database before migrations)."
+            )
+            return
+
+        actual = (
+            await conn.execute(
+                text(
+                    "SELECT atttypmod FROM pg_attribute "
+                    "WHERE attrelid = 'embeddings'::regclass AND attname = 'embedding'"
+                )
+            )
+        ).scalar()
+
+    if actual is not None and actual != expected:
+        raise RuntimeError(
+            f"EMBEDDING_DIMENSIONS={expected} but the `embeddings.embedding` "
+            f"column is vector({actual}). Run / review the embedding-dimension "
+            "migration before starting the service."
+        )
+    logger.info(
+        "Embedding dimension check passed: configured=%d db=%s",
+        expected,
+        actual,
+    )
+
+
 async def commit_session(session: AsyncSession) -> None:
     """Commit a session with automatic rollback on error.
 

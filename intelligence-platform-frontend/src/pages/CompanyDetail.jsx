@@ -7,7 +7,6 @@ import {
   getFinancialMetrics,
   getTechnicalIndicators,
 } from '../services/api';
-import StatusChip from '../components/StatusChip';
 
 export default function CompanyDetail() {
   const { ticker } = useParams();
@@ -19,11 +18,13 @@ export default function CompanyDetail() {
   const [technicals, setTechnicals] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       setError(null);
+      setNotFound(false);
       try {
         const [q, p, s, m, t] = await Promise.allSettled([
           getStockQuote(ticker),
@@ -32,6 +33,20 @@ export default function CompanyDetail() {
           getFinancialMetrics(ticker),
           getTechnicalIndicators(ticker),
         ]);
+
+        // The quote is the core request: the backend returns 404 when the
+        // company doesn't exist OR is outside the requester's granted
+        // companies (user_companies scoping). Promise.allSettled swallows
+        // rejections, so surface that case explicitly instead of silently
+        // rendering an empty page.
+        if (q.status === 'rejected') {
+          if (q.reason?.status === 404) {
+            setNotFound(true);
+            return;
+          }
+          setError(q.reason?.message || 'Failed to load company data');
+        }
+
         setQuote(q.status === 'fulfilled' ? q.value : null);
         setPrices(p.status === 'fulfilled' ? p.value?.prices || [] : []);
         setStatements(s.status === 'fulfilled' ? s.value || [] : []);
@@ -50,6 +65,28 @@ export default function CompanyDetail() {
     return (
       <div className="flex items-center justify-center py-32">
         <div className="text-on-surface-variant text-lg">Loading {ticker}...</div>
+      </div>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <div>
+        <button
+          onClick={() => navigate('/companies')}
+          className="text-on-surface-variant hover:text-on-surface transition-colors mb-4 flex items-center gap-1 text-sm"
+        >
+          <span className="material-symbols-outlined text-sm">arrow_back</span>
+          Back to Companies
+        </button>
+        <div className="card py-16 text-center text-on-surface-variant">
+          <span className="material-symbols-outlined text-5xl mb-4 block text-error">block</span>
+          <p className="text-lg mb-2 text-on-surface">{ticker} is not available</p>
+          <p className="text-sm max-w-md mx-auto">
+            This company isn&apos;t part of your assigned portfolio, or it
+            doesn&apos;t exist. Ask your administrator for access if you need it.
+          </p>
+        </div>
       </div>
     );
   }

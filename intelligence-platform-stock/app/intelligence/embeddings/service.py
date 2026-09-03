@@ -3,7 +3,8 @@ Generic embedding service — orchestrates client, batching, and persistence.
 
 Knows HOW to produce and store embeddings end-to-end. Knows nothing about
 domains: which content to embed, what metadata to attach, and when to run
-are domain decisions.
+are domain decisions. Persistence writes through the framework-owned
+``Embedding`` ORM (``app/intelligence/models/``) unless a store is injected.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ class GenericEmbeddingService:
 
     Usage:
         svc = GenericEmbeddingService(
-            store=PgVectorStore(MyDomainEmbeddingModel, 1536, "text-embedding-3-small"),
+            store=PgVectorStore(),  # resolves the framework-owned Embedding ORM
         )
         vector = await svc.embed("some content")
         stored = await svc.store(session, record)
@@ -136,15 +137,20 @@ class GenericEmbeddingService:
 
 
 def build_generic_service(
-    embedding_model: type,
+    embedding_model: type | None = None,
     *,
     dimensions: int | None = None,
     model_name: str | None = None,
     client: EmbeddingClient | None = None,
 ) -> GenericEmbeddingService:
     """
-    Convenience factory binding a domain's embedding ORM table to a
-    generic service. Each domain passes its own table class.
+    Convenience factory binding the **framework-owned** ``Embedding`` ORM to a
+    generic service (the ``embeddings`` table is framework-owned, so this is
+    the default; domains never pass their own table class for it).
+
+    ``embedding_model`` is accepted for injection symmetry only — passing a
+    different model does not change ownership of the ``embeddings`` schema
+    (architecture §11.3).
     """
     resolved_client = client or EmbeddingClient()
     store = PgVectorStore(

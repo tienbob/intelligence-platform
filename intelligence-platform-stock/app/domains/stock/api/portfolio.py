@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,16 +23,21 @@ from app.domains.stock.schemas.portfolio import (
     PortfolioOptimizeResponse,
 )
 from app.domains.stock.scoring.portfolio_optimizer import PortfolioOptimizer
+from app.shared.identity import requester_scope, scoped_where
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 
 async def _build_opportunities(
     db: AsyncSession,
+    scope: set[int] | None,
     tickers: list[str] | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Load latest investment scores with risk data, deduplicated per company."""
+    """Load latest investment scores with risk data, deduplicated per company.
+
+    ``scope`` is the requesting user's granted company-id set (``None`` → all).
+    """
     latest_score_subq = (
         select(
             InvestmentScore.company_id,
@@ -53,6 +58,8 @@ async def _build_opportunities(
         .order_by(desc(InvestmentScore.overall_score))
         .limit(limit)
     )
+
+    query = scoped_where(query, InvestmentScore.company_id, scope)
 
     if tickers:
         query = query.where(Company.ticker.in_([t.upper() for t in tickers]))
@@ -84,10 +91,15 @@ async def _build_opportunities(
 @router.post("/optimize", response_model=PortfolioOptimizeResponse)
 async def optimize_portfolio(
     request: PortfolioOptimizeRequest,
+    fastapi_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Optimize portfolio allocation (stateless; kept for future use).
+    Optimize portfolio allocation (stateless; kept for future use) — scoped
+    to the requesting user's companies.
     """
-    opportunities = await _build_opportunities(db, tickers=request.tickers)
+    scope = await requester_scope(fastapi_request, db)
+    opportunities = await _build_opportunities(
+        db, scope, tickers=request.tickers
+    )
     return PortfolioOptimizer().optimize(opportunities, request)

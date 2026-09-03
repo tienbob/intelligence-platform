@@ -1,11 +1,11 @@
 # Intelligence Platform Architecture v3
 
 **Status:** Current architectural source of truth  
-**Date:** 2026-08-25  
+**Date:** 2026-08-25 (updated 2026-09-03)  
 **Project:** Intelligence Platform  
 **Primary reference domain:** Stock / Investment Intelligence  
-**Current framework test status:** 103/103 passing  
-**Current migration status:** Phase 12 complete; Phase 13 Shadow Production is next
+**Current framework test status:** 151/151 passing  
+**Current migration status:** Gates 1–6 complete. Gate 7 (documentation audit) and Gate 8 (production integrity audit) in progress.
 
 ---
 
@@ -44,7 +44,7 @@ The intended end state is:
   Domain            (HR, Legal, etc.)
 ```
 
-The current state is no longer merely an architectural prototype. The platform has a working generic core and a fully wired Stock composition root. The remaining work is primarily **production equivalence, shadow execution, storage ownership migration, and safe switchover**.
+The current state is that the framework is the **production analysis engine** for both API and scheduled worker entry points. Legacy analysis orchestration has been removed. Storage ownership matches the target architecture. The remaining work is **documentation audit (Gate 7) and final production integrity audit (Gate 8)**.
 
 ---
 
@@ -617,20 +617,20 @@ Therefore:
 
 Some framework capability persistence models originated inside Stock during the earlier migration.
 
-For example, the current `Embedding` ORM ownership remains a legacy Stock location.
-
-That is a migration artifact, not the target architecture.
-
-The target is:
+That **was** a migration artifact, not the target architecture — and it is now resolved (Gate 4.2):
 
 ```text
+app/intelligence/models/
+    └── embeddings.py  → framework-owned Embedding ORM + AsyncVector
 app/intelligence/embeddings/
-    └── framework-owned Embedding model/schema
+    └── persistence.py → PgVectorStore resolves to the framework model
 ```
 
-with Stock consuming it through the generic persistence API.
-
-This migration occurs only after the framework execution path is proven stable.
+Stock consumes the ``embeddings`` table through the generic persistence API
+(``PgVectorStore()`` / ``app.intelligence.embeddings``); it no longer defines
+or imports any embedding model from ``app/domains/``. The schema carries the
+generic identity ``(domain, entity_type, entity_id)`` (Alembic ``0020``), so a
+second domain (HR/legal) can reuse the table without reshaping it.
 
 ## 11.5 Domain extension data
 
@@ -1282,7 +1282,7 @@ Framework hardening is complete.
 Current test count:
 
 ```text
-103/103 tests passing
+151/151 tests passing
 ```
 
 The following are enforced:
@@ -1296,25 +1296,26 @@ The following are enforced:
 - provider-independent LLM testing
 - deterministic AAPL fixture
 
-## Phase 13 — NEXT
+## Phase 13 — COMPLETE
 
 Shadow Production.
 
-The framework and legacy paths will run side-by-side while the legacy result remains authoritative.
+The framework and legacy paths ran side-by-side while the legacy result remained authoritative.
+Equivalence verified for AAPL, NVDA, MSFT, TSLA, SPY, SKHY (6/6 hard-gate PASS).
 
-## Phase 14
+## Phase 14 — COMPLETE
 
-Live LLM equivalence when the provider is available.
+Live LLM equivalence verified when the provider is available.
 
-## Phase 15
+## Phase 15 — COMPLETE
 
 Framework storage ownership migration.
 
-## Phase 16
+## Phase 16 — COMPLETE
 
 Production switchover.
 
-## Phase 17
+## Phase 17 — COMPLETE
 
 Legacy cleanup.
 

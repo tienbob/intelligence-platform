@@ -9,6 +9,20 @@ module Api
     # internal service key and the forwarded user identity headers — never the
     # user's JWT.
     class ProxyController < BaseController
+      # Ticker-scoped reads that must resolve (or summon) the company first.
+      TICKER_SCOPED_ACTIONS = %w[
+        stocks_quote stocks_prices company prices
+        financial_statements financial_metrics financial_technical
+      ].freeze
+
+      # Access-grant orchestration (docs/TABLE_OWNERSHIP.md): Rails owns
+      # `user_companies` assignment. For logged-in users, ensure the ticker
+      # is tracked (Python summons/ingests it when missing) and the user is
+      # granted visibility BEFORE the read is proxied; Python scopes every
+      # read to granted companies. Anonymous requests skip this — Python
+      # self-populates on unscoped reads.
+      before_action :ensure_company_access!, only: TICKER_SCOPED_ACTIONS
+
       # ── Stocks ──────────────────────────────────────────────
       def stocks_quote
         render_python(:get, "/stocks/#{params[:ticker]}")
@@ -146,6 +160,33 @@ module Api
       end
 
       private
+
+      # ── Company summon + grant (see before_action above) ──────────
+      def ensure_company_access!
+        return if current_user.id.blank?
+
+        symbol = params[:ticker].to_s.strip.upcase
+        return if symbol.blank?
+
+        Rails.cache.fetch("company-grant/#{current_user.id}/#{symbol}", expires_in: 5.minutes) do
+          result = PythonClient.ensure_company(symbol, user: current_user)
+          company_id = result["company_id"]
+          raise PythonClient::PythonError.new(404, "ensure_company returned no company_id for #{symbol}") if company_id.blank?
+
+          begin
+            UserCompany.find_or_create_by!(user_id: current_user.id, company_id: company_id)
+          rescue ActiveRecord::RecordNotUnique
+            nil # concurrent duplicate grant — the UNIQUE index guarantees one row
+          end
+          true
+        end
+      rescue PythonClient::PythonError => e
+        # Non-blocking: the proxied call below returns the proper upstream
+        # status (404 for an unknown/ingest-failed ticker, 502 if Python is
+        # down). Grant failures must not mask the real read result.
+        Rails.logger.warn("[proxy] ensure_company failed: #{e.status} #{e.body}")
+        nil
+      end
 
       def render_python(method, path, query: {}, body: nil)
         data = PythonClient.public_send(method, path, query: query, body: body, user: current_user)

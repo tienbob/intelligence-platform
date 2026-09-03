@@ -31,7 +31,13 @@ async function request(url, options = {}) {
     // Architecture §71: error responses use {"error": {"code": ..., "message": ...}}
     // Fall back to flat {"detail": "..."} for backward compatibility
     const message = err?.error?.message || err?.detail || `HTTP ${res.status}`;
-    throw new Error(message);
+    const error = new Error(message);
+    // Attach the HTTP status + parsed body so callers can distinguish error
+    // kinds (e.g. 404 = not found, or company outside the caller's granted
+    // companies via user_companies scoping).
+    error.status = res.status;
+    error.body = err;
+    throw error;
   }
   // 204 No Content — no body to parse (e.g. DELETE responses)
   if (res.status === 204) {

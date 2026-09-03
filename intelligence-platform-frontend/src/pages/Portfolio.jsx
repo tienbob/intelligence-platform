@@ -54,10 +54,6 @@ export default function Portfolio() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <button className="btn-sm btn-secondary" onClick={loadOpportunities}>Refresh</button>
-          <button className="btn-sm btn-primary" onClick={() => navigate('/analysis')}>
-            <span className="material-symbols-outlined text-sm">bolt</span>
-            Run AI Analysis
-          </button>
         </div>
       </div>
 
@@ -130,8 +126,6 @@ export default function Portfolio() {
               <div className="py-14 text-center text-on-surface-variant">
                 <span className="material-symbols-outlined text-4xl mb-2 block">search</span>
                 <p>No scored opportunities yet.</p>
-                <p className="text-xs mt-1">Run AI analysis on companies, then revisit here.</p>
-                <button className="btn-sm btn-primary mt-4" onClick={() => navigate('/analysis')}>Run AI Analysis</button>
               </div>
             )}
           </div>

@@ -6,6 +6,10 @@ The framework owns HOW embeddings are made and stored:
     retry/backoff, pgvector persistence, dimension validation,
     dedup filtering.
 
+The framework also owns the ``embeddings`` ORM model itself
+(``app.intelligence.models.Embedding``, Gate 4.2) — see
+``docs/TABLE_OWNERSHIP.md`` (framework-owned) and architecture §11.1.
+
 Domains own WHAT gets embedded and WHEN:
     content selection, bucket semantics, domain metadata.
 
@@ -36,8 +40,11 @@ from app.intelligence.embeddings.service import (
     build_generic_service,
 )
 from app.intelligence.embeddings.types import VectorRecord, chunked
+from app.intelligence.models import AsyncVector, Embedding
 
 __all__ = [
+    "AsyncVector",
+    "Embedding",
     "EmbeddingClient",
     "GenericEmbeddingService",
     "PgVectorStore",

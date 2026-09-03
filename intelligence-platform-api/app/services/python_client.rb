@@ -40,6 +40,13 @@ class PythonClient
       request(:delete, path, body: body, query: query, user: user)
     end
 
+    # Idempotently ensure a ticker is tracked by the Python service.
+    # Returns { "ticker" => ..., "company_id" => ..., "created" => bool } —
+    # summons (auto-ingests prices/fundamentals/news) when not yet tracked.
+    def ensure_company(ticker, user: nil)
+      post("/companies/#{ticker}/ensure", user: user)
+    end
+
     # Raises PythonError (with status + extracted detail) on non-2xx so the
     # controller can propagate the correct upstream status code.
     def request(method, path, body: nil, query: {}, user: nil)

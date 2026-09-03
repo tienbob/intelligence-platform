@@ -14,6 +14,7 @@ Provider registry:
 
 from app.domains.stock.providers.base import (
     AlternativeDataProvider,
+    AuthenticationError,
     CircuitBreaker,
     CircuitBreakerOpenError,
     DataFreshness,
@@ -21,6 +22,7 @@ from app.domains.stock.providers.base import (
     MacroDataProvider,
     MarketDataProvider,
     NewsProvider,
+    NotEntitledError,
     ProviderError,
     RateLimitError,
 )
@@ -84,6 +86,8 @@ __all__ = [
     # Errors / utilities
     "ProviderError",
     "RateLimitError",
+    "AuthenticationError",
+    "NotEntitledError",
     "CircuitBreakerOpenError",
     "CircuitBreaker",
     "DataFreshness",

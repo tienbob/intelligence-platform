@@ -106,6 +106,14 @@ class RateLimitError(ProviderError):
         super().__init__(provider, "Rate limit exceeded", 429)
 
 
+class AuthenticationError(ProviderError):
+    """Raised when a provider rejects the configured credentials."""
+
+
+class NotEntitledError(ProviderError):
+    """Raised when credentials are valid but the plan lacks a capability."""
+
+
 class CircuitBreakerOpenError(ProviderError):
     """Raised when the circuit breaker is open."""
 
@@ -266,6 +274,26 @@ class BaseProvider(ABC):
                     raise RateLimitError(
                         self.provider_name,
                         retry_after=int(response.headers.get("Retry-After", "60")),
+                    )
+
+                if response.status_code == 401:
+                    raise AuthenticationError(
+                        self.provider_name,
+                        "Authentication failed",
+                        response.status_code,
+                    )
+
+                if response.status_code == 403:
+                    body = response.text.lower()
+                    error_type = (
+                        "Data entitlement missing"
+                        if "not entitled" in body or "not_authorized" in body
+                        else "Access forbidden"
+                    )
+                    raise NotEntitledError(
+                        self.provider_name,
+                        error_type,
+                        response.status_code,
                     )
 
                 response.raise_for_status()

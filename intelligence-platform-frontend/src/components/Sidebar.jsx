@@ -20,7 +20,7 @@ export default function Sidebar() {
     <aside className="hidden md:flex fixed left-0 top-0 h-full flex-col pt-16 z-40 bg-surface-container-lowest border-r border-outline-variant w-sidebar-width">
       {/* Sidebar Header */}
       <div className="px-container-margin py-6 border-b border-outline-variant/50 flex items-center gap-3">
-        <div className="w-10 h-10 rounded bg-surface-variant border border-outline-variant flex items-center justify-center flex-shrink-0">
+        <div className="w-12 h-10 rounded bg-surface-variant border border-outline-variant flex items-center justify-center flex-shrink-0">
           <span className="material-symbols-outlined text-on-surface-variant">account_balance</span>
         </div>
         <div>

@@ -5,13 +5,12 @@
 The framework knows **HOW** to run intelligence.
 The domain knows **WHAT** intelligence means.
 
-> **Current status (honest):** the V3 framework is implemented and
-> test-verified through **Phase 12** (framework hardening + deterministic
-> Stock proof, 110/110 tests). Production analysis still runs through legacy
-> Stock orchestration; shadow production (Phase 13), storage-ownership
-> migration (Phase 15) and switchover (Phase 16) are pending. See
-> `intelligence-platform-stock/docs/CHECKLIST.md` for the gated roadmap and
-> `docs/Audit_result.md` for the latest audit.
+> **Current status:** The V3 framework is the **production analysis engine**
+> for both API and scheduled worker entry points (Gate 5.2 switchover complete).
+> Legacy analysis orchestration removed (Gate 6 cleanup complete). Storage
+> ownership matches the target architecture (Gate 4 complete). All gates
+> 1–6 pass; Gate 7 (documentation audit) and Gate 8 (production integrity
+> audit) in progress.
 
 ## Repository Layout
 

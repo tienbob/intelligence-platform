@@ -29,6 +29,7 @@ class StockConfig(BaseSettings):
     MASSIVE_API_KEY: Optional[str] = None
     MASSIVE_BASE_URL: str = "https://api.massive.com"
     MASSIVE_RATE_LIMIT: int = 5
+    MASSIVE_ENABLE_PAID_ENDPOINTS: bool = False
 
     SEC_USER_AGENT: str = "Market Intelligence research@example.com"
     SEC_BASE_URL: str = "https://data.sec.gov"
@@ -51,11 +52,12 @@ class StockConfig(BaseSettings):
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 4096
 
-    # ── Embeddings ───────────────────────────────────────────────
-    EMBEDDING_PROVIDER: str = "openai"
-    EMBEDDING_API_KEY: Optional[str] = None
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSIONS: int = 1536
+    # NOTE: embedding settings (EMBEDDING_PROVIDER / EMBEDDING_API_KEY /
+    # EMBEDDING_MODEL / EMBEDDING_DIMENSIONS) are NOT duplicated here. They are
+    # platform infrastructure owned by app/core/config.py — the stock-domain
+    # copy pre-dates the framework embedding core and carried a stale 1536-dim
+    # default that could drift from the DB's vector(3072) (MIGRATION_FIX_PLAN
+    # §P1, Gate 4.2). Single source of truth: app/core/config.py.
 
     # ── Background Processing Intervals ──────────────────────────
     MARKET_DATA_UPDATE_INTERVAL_MIN: int = 5
@@ -97,16 +99,10 @@ class StockConfig(BaseSettings):
     SCORING_MODEL: str = "investment_score_v1"
     SCORING_VERSION: str = "1.0"
 
-    # ── Analysis engine selection (PLAN.md Gate 5.1) ─────────────
-    # "legacy"    → shared CompanyAnalysisService orchestration (current
-    #               production engine; ContextBuilder + LLMService +
-    #               InvestmentScoringEngine under one roof).
-    # "framework" → generic IntelligencePipeline via
-    #               pipeline_factory.build_stock_pipeline().
-    # Both production entry points (API + scheduled worker) route through
-    # execute_company_analysis(), which is the ONLY place this is read.
-    ANALYSIS_ENGINE: str = "legacy"
-
+    # NOTE: the ANALYSIS_ENGINE flag (PLAN Gate 5.1) was removed after
+    # Gate 6 — the framework is the only production engine and
+    # execute_company_analysis() has a single code path. Rollback = git
+    # revert to the pre-cleanup revision.
 
     # ── Recommendation Thresholds ────────────────────────────────
     RECOMMENDATION_THRESHOLDS: List[dict[str, Any]] = Field(default_factory=lambda: [

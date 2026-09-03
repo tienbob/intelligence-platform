@@ -19,7 +19,6 @@ from app.domains.stock.models.analysis import (
     Analysis,
     AnalysisSource,
     AnomalyScore,
-    Embedding,
     InvestmentScore,
     RiskMetric,
     TechnicalIndicator,
@@ -48,7 +47,6 @@ __all__ = [
     "AnomalyScore",
     "RiskMetric",
     # AI
-    "Embedding",
     "Analysis",
     "InvestmentScore",
     "AnalysisSource",
