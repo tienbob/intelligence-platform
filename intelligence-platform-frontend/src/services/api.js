@@ -43,7 +43,20 @@ async function request(url, options = {}) {
   if (res.status === 204) {
     return null;
   }
-  const json = await res.json();
+  const text = await res.text();
+  // Empty body (e.g. a DELETE proxied through Rails that returns 200 with no
+  // body). Treat it as a successful no-content response rather than crashing
+  // on res.json().
+  if (!text) {
+    return null;
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // Non-JSON body — return it as-is instead of throwing.
+    return text;
+  }
   // Architecture §71: unwrap response envelope {"data": {...}, "meta": {...}}
   // If the response has a "data" key at the top level, return its value.
   // Otherwise return the raw response (for health/metrics endpoints that skip the envelope).
@@ -71,6 +84,8 @@ export const getCompanies = (params = {}) => {
   return request(`/companies/${qs ? `?${qs}` : ''}`);
 };
 export const getCompany = (ticker) => request(`/companies/${ticker}`);
+export const deleteCompany = (ticker) =>
+  request(`/companies/${ticker}`, { method: 'DELETE' });
 
 // Prices
 export const getPrices = (ticker, params = {}) => {

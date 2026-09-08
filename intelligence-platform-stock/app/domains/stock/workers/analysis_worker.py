@@ -33,9 +33,25 @@ async def recalculate_scores() -> None:
         companies = result.scalars().all()
 
         scoring = InvestmentScoringEngine(session)
+
+        # Pass the canonical fundamental snapshot so sub-scores are computed
+        # from real data. Without it, _score_fundamental_snapshot() /
+        # _score_growth_snapshot() silently return the 50.0 neutral
+        # placeholder whenever the FinancialMetric rows lag, persisting
+        # hardcoded-looking sub-scores that later become the "latest" score.
+        from app.domains.stock.scoring.context_builder import ContextBuilder
+
+        builder = ContextBuilder(session)
+
         for company in companies:
             try:
-                await scoring.calculate_score(company.id)
+                snapshot = await builder.build_fundamental_snapshot(
+                    company.id
+                )
+                await scoring.calculate_score(
+                    company.id,
+                    context={"fundamental_snapshot": snapshot},
+                )
             except Exception as exc:
                 logger.error("Failed to recalculate score for %s: %s", company.ticker, exc)
 

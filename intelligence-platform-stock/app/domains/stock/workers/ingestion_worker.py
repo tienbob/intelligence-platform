@@ -17,6 +17,67 @@ from app.domains.stock.models.company import Company
 logger = get_logger(__name__)
 
 
+async def ingest_sec_filings() -> None:
+    """Ingest SEC XBRL company facts and build filing chunks for RAG.
+
+    Companies without a SEC CIK, or instruments whose CIK is not
+    supported by the SEC Company Facts endpoint, are skipped.
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(
+                Company.id,
+                Company.ticker,
+                Company.cik,
+            ).limit(50)
+        )
+        companies = result.all()
+
+        ingestion = FundamentalsIngestion(session)
+
+        for company_id, ticker, company_cik in companies:
+            ticker = ticker.upper().strip() if ticker else ""
+
+            if not company_cik:
+                logger.info(
+                    "Skipping SEC ingestion for %s: no SEC CIK",
+                    ticker,
+                )
+                continue
+
+            try:
+                cik = str(company_cik).strip().zfill(10)
+
+                await ingestion.ingest_sec_facts(
+                    cik=cik,
+                    ticker=ticker,
+                    company_id=company_id,
+                )
+
+            except Exception as exc:
+                # SEC Company Facts returns 404 for instruments that have
+                # a CIK record but no Company Facts dataset, such as ETFs.
+                if "HTTP 404" in str(exc):
+                    logger.info(
+                        "Skipping SEC ingestion for %s: "
+                        "SEC Company Facts unavailable for CIK %s",
+                        ticker,
+                        cik,
+                    )
+                    continue
+
+                logger.error(
+                    "Failed to ingest SEC filings for %s: %s",
+                    ticker,
+                    exc,
+                )
+
+        logger.info(
+            "SEC filing ingestion complete for %d companies",
+            len(companies),
+        )
+
+
 async def ingest_fundamentals() -> None:
     """Ingest fundamentals for tracked companies."""
 

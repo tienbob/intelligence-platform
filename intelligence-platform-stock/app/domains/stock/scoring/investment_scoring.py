@@ -228,7 +228,9 @@ class InvestmentScoringEngine:
         normalized = max(0, min(100, normalized))
         return 100 - normalized if invert else normalized
 
-    async def _score_fundamental(self, company_id: int) -> float:
+    async def _score_fundamental(
+        self, company_id: int, fundamental_snapshot: dict[str, Any] | None = None
+    ) -> float:
         """Score fundamental quality (0-100)."""
         result = await self.session.execute(
             select(FinancialMetric)
@@ -238,7 +240,7 @@ class InvestmentScoringEngine:
         )
         m = result.scalar_one_or_none()
         if not m:
-            return 50.0
+            return self._score_fundamental_snapshot(fundamental_snapshot)
 
         scores = []
         # ROE: 0-30% → 0-100
@@ -254,9 +256,98 @@ class InvestmentScoringEngine:
         if m.debt_equity is not None:
             scores.append(self._normalize(m.debt_equity, 0, 2, invert=True))
 
+        return sum(scores) / len(scores) if scores else self._score_fundamental_snapshot(fundamental_snapshot)
+
+    @staticmethod
+    def _snapshot_metric(
+        snapshot: dict[str, Any] | None,
+        key: str,
+    ) -> Any:
+        """
+        Read a metric from a canonical fundamental snapshot regardless of layout.
+
+        The framework snapshot is flat (``gross_margin`` at top level). The
+        legacy layout nests metrics under ``metrics`` and statement values
+        under ``latest_statement``. Reading only top-level keys silently
+        returned 50.0 (the neutral placeholder) even when the snapshot was
+        fully populated — exactly the hardcoded-found-score defect seen in
+        AAPL/NVDA payloads.
+        """
+        if not isinstance(snapshot, dict):
+            return None
+
+        metrics = snapshot.get("metrics")
+
+        if isinstance(metrics, dict) and metrics.get(key) is not None:
+            return metrics.get(key)
+
+        return snapshot.get(key)
+
+    @staticmethod
+    def _score_fundamental_snapshot(snapshot: dict[str, Any] | None) -> float:
+        """Score canonical statement values when derived DB metrics lag."""
+        if not snapshot:
+            return 50.0
+
+        scores = []
+
+        gross_margin = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "gross_margin",
+        )
+
+        net_margin = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "net_margin",
+        )
+
+        # Derive net margin from the canonical latest statement when the
+        # metric tables lag and no explicit margin was recorded.
+        if net_margin is None:
+            latest_statement = (
+                snapshot.get("latest_statement")
+                if isinstance(snapshot, dict)
+                else None
+            )
+
+            if isinstance(latest_statement, dict):
+                revenue = latest_statement.get("revenue")
+                net_income = latest_statement.get("net_income")
+
+                if (
+                    revenue is not None
+                    and net_income is not None
+                    and float(revenue) != 0
+                ):
+                    try:
+                        net_margin = float(net_income) / float(revenue)
+                    except (TypeError, ValueError):
+                        net_margin = None
+
+        for value, ceiling in (
+            (gross_margin, 0.75),
+            (net_margin, 0.20),
+        ):
+            if value is not None:
+                scores.append(min(100.0, max(0.0, float(value) * 100 / ceiling)))
+
+        equity = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "shareholders_equity",
+        )
+        debt = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "total_debt",
+        )
+        if equity and debt is not None:
+            scores.append(InvestmentScoringEngine._normalize(debt / equity, 0, 2, invert=True))
         return sum(scores) / len(scores) if scores else 50.0
 
-    async def _score_valuation(self, company_id: int) -> float:
+    async def _score_valuation(
+        self,
+        company_id: int,
+        fundamental_snapshot: dict[str, Any] | None = None,
+    ) -> float:
         """Score valuation attractiveness (0-100)."""
         result = await self.session.execute(
             select(FinancialMetric)
@@ -265,26 +356,115 @@ class InvestmentScoringEngine:
             .limit(1)
         )
         m = result.scalar_one_or_none()
-        if not m:
-            return 50.0
+        valuation_values = m
+        if m is None or all(
+            getattr(m, name, None) is None
+            for name in ("pe_ratio", "ps_ratio", "pb_ratio", "fcf_yield")
+        ):
+            from app.domains.stock.models.company import Company
+            from app.domains.stock.scoring.fundamental_analysis import (
+                FundamentalAnalysisEngine,
+            )
+
+            company = await self.session.get(Company, company_id)
+            statements = await FundamentalAnalysisEngine(self.session)._load_statements(
+                company_id
+            )
+            calculated = FundamentalAnalysisEngine(self.session).calculate_metrics(
+                statements,
+                market_cap=company.market_cap if company else None,
+            )
+            valuation_values = type("ValuationValues", (), calculated)()
+        if valuation_values is None:
+            # Last resort: read valuation ratios from the canonical
+            # fundamental snapshot so populated data is never ignored.
+            # (Previously this method had NO snapshot fallback at all and
+            # returned the flat 50.0 neutral placeholder even when the
+            # snapshot contained real PE/PS/PB ratios — the hardcoded-looking
+            # "Valuation score: 50" seen across every AAPL/NVDA sample.)
+            return self._score_valuation_snapshot(fundamental_snapshot)
 
         scores = []
         # P/E: 5-40 → 100-0 (lower is better)
-        if m.pe_ratio is not None and m.pe_ratio > 0:
-            scores.append(self._normalize(m.pe_ratio, 5, 40, invert=True))
+        pe_ratio = getattr(valuation_values, "pe_ratio", None)
+        ps_ratio = getattr(valuation_values, "ps_ratio", None)
+        pb_ratio = getattr(valuation_values, "pb_ratio", None)
+        fcf_yield = getattr(valuation_values, "fcf_yield", None)
+        if pe_ratio is not None and pe_ratio > 0:
+            scores.append(self._normalize(pe_ratio, 5, 40, invert=True))
         # P/S: 0.5-10 → 100-0
-        if m.ps_ratio is not None and m.ps_ratio > 0:
-            scores.append(self._normalize(m.ps_ratio, 0.5, 10, invert=True))
+        if ps_ratio is not None and ps_ratio > 0:
+            scores.append(self._normalize(ps_ratio, 0.5, 10, invert=True))
         # P/B: 0.5-5 → 100-0
-        if m.pb_ratio is not None and m.pb_ratio > 0:
-            scores.append(self._normalize(m.pb_ratio, 0.5, 5, invert=True))
+        if pb_ratio is not None and pb_ratio > 0:
+            scores.append(self._normalize(pb_ratio, 0.5, 5, invert=True))
         # FCF yield: 0-10% → 0-100 (higher is better)
-        if m.fcf_yield is not None:
-            scores.append(min(100, m.fcf_yield * 10))
+        if fcf_yield is not None:
+            scores.append(min(100, fcf_yield * 10))
+
+        if scores:
+            return sum(scores) / len(scores)
+
+        # The FinancialMetric table / statement engine returned no usable
+        # valuation ratios; fall back to the canonical snapshot.
+        return self._score_valuation_snapshot(fundamental_snapshot)
+
+    @staticmethod
+    def _score_valuation_snapshot(
+        snapshot: dict[str, Any] | None,
+    ) -> float:
+        """Score valuation ratios from the canonical fundamental snapshot."""
+        if not isinstance(snapshot, dict):
+            return 50.0
+
+        scores = []
+
+        pe_ratio = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "pe_ratio",
+        )
+        ps_ratio = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "ps_ratio",
+        )
+        pb_ratio = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "pb_ratio",
+        )
+
+        if pe_ratio is not None and pe_ratio > 0:
+            scores.append(
+                InvestmentScoringEngine._normalize(
+                    pe_ratio,
+                    5,
+                    40,
+                    invert=True,
+                )
+            )
+        if ps_ratio is not None and ps_ratio > 0:
+            scores.append(
+                InvestmentScoringEngine._normalize(
+                    ps_ratio,
+                    0.5,
+                    10,
+                    invert=True,
+                )
+            )
+        if pb_ratio is not None and pb_ratio > 0:
+            scores.append(
+                InvestmentScoringEngine._normalize(
+                    pb_ratio,
+                    0.5,
+                    5,
+                    invert=True,
+                )
+            )
 
         return sum(scores) / len(scores) if scores else 50.0
 
-    async def _score_growth(self, company_id: int) -> float:
+    async def _score_growth(
+        self, company_id: int, fundamental_snapshot: dict[str, Any] | None = None
+    ) -> float:
         """Score growth metrics (0-100)."""
         result = await self.session.execute(
             select(FinancialMetric)
@@ -294,7 +474,7 @@ class InvestmentScoringEngine:
         )
         m = result.scalar_one_or_none()
         if not m:
-            return 50.0
+            return self._score_growth_snapshot(fundamental_snapshot)
 
         scores = []
         # Revenue growth: 0-30% → 0-100
@@ -307,7 +487,26 @@ class InvestmentScoringEngine:
         if m.fcf_growth is not None:
             scores.append(min(100, max(0, m.fcf_growth * 100 / 0.30)))
 
-        return sum(scores) / len(scores) if scores else 50.0
+        return sum(scores) / len(scores) if scores else self._score_growth_snapshot(fundamental_snapshot)
+
+    @staticmethod
+    def _score_growth_snapshot(snapshot: dict[str, Any] | None) -> float:
+        """Use an explicitly supplied growth rate when DB metrics lag."""
+        if not snapshot:
+            return 50.0
+
+        growth = InvestmentScoringEngine._snapshot_metric(
+            snapshot,
+            "revenue_growth_yoy",
+        )
+        if growth is None:
+            growth = InvestmentScoringEngine._snapshot_metric(
+                snapshot,
+                "revenue_growth",
+            )
+        if growth is None:
+            return 50.0
+        return min(100.0, max(0.0, float(growth) * 100 / 0.30))
 
     async def _score_technical(self, company_id: int) -> float:
         """Score technical indicators (0-100)."""
@@ -519,7 +718,9 @@ class InvestmentScoringEngine:
             logger.warning("Business rule validation issues: %s", issues)
         return issues
 
-    async def calculate_score(self, company_id: int) -> InvestmentScore:
+    async def calculate_score(
+        self, company_id: int, context: dict[str, Any] | None = None
+    ) -> InvestmentScore:
         """
         Calculate the full investment score.
 
@@ -547,9 +748,10 @@ class InvestmentScoringEngine:
         volatility = await self._score_volatility(company_id)
         market_regime = await self._score_market_regime(company_id)
 
-        fundamental = await self._score_fundamental(company_id)
-        valuation = await self._score_valuation(company_id)
-        growth = await self._score_growth(company_id)
+        fundamental_snapshot = (context or {}).get("fundamental_snapshot")
+        fundamental = await self._score_fundamental(company_id, fundamental_snapshot)
+        valuation = await self._score_valuation(company_id, fundamental_snapshot)
+        growth = await self._score_growth(company_id, fundamental_snapshot)
         technical = await self._score_technical(company_id)
         sentiment = await self._score_sentiment(company_id)
         catalyst = await self._score_catalyst(company_id)

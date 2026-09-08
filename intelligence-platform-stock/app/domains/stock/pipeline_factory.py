@@ -67,14 +67,33 @@ class StockRAGPipelineAdapter:
     async def retrieve_context(self, query: str, **kwargs: Any) -> dict[str, Any]:
         import app.domains.stock.normalization.companies  # noqa: F401  (registers normalizer)
         from app.core.database import async_session_factory
+        from app.domains.stock.models.company import Company
         from app.domains.stock.scoring.rag import RAGService as _StockRAGService
+        from sqlalchemy import select
 
         ticker = kwargs.get("entity_id") or query
-        async with async_session_factory() as session:
-            rag = _StockRAGService(
-                session, embedding_service=self._embedding_service
+        empty = {"news": [], "sec_filing": [], "event": [], "analysis": []}
+        try:
+            async with async_session_factory() as session:
+                company_result = await session.execute(
+                    select(Company.id).where(Company.ticker == str(ticker).upper()).limit(1)
+                )
+                company_id = company_result.scalar_one_or_none()
+                if company_id is None:
+                    return empty
+                rag = _StockRAGService(
+                    session, embedding_service=self._embedding_service
+                )
+                return await rag.retrieve_company_context(ticker, company_id=company_id)
+        except Exception:
+            # Retrieval must never hard-fail an analysis: degrade to empty
+            # buckets and let the stage diagnostics record the outage.
+            logger.warning(
+                "RAG retrieval failed for %s; degrading to empty buckets",
+                ticker,
+                exc_info=True,
             )
-            return await rag.retrieve_context(ticker)
+            return empty
 
 
 async def run_stock_analysis(ticker: str, **overrides: Any):

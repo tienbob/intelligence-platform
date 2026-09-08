@@ -26,6 +26,7 @@ from app.core.logging import get_logger
 from app.domains.stock.models.analysis import Analysis
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.event import MarketEvent
+from app.domains.stock.models.financial import SecFiling
 from app.domains.stock.models.news import CompanyNews, News
 from app.intelligence.embeddings import (
     Embedding,  # framework-owned ORM — consumed via contract, not defined here
@@ -260,29 +261,22 @@ class EmbeddingIngestionService:
     # ------------------------------------------------------------------
 
     def _generic_batch_service(self) -> GenericEmbeddingService:
-        """
-        Lazily bind the generic embedding engine to Stock's
-        Embedding model / pgvector store.
+      """
+      Lazily bind the generic embedding engine to Stock's
+      framework-owned pgvector store.
 
-        IMPORTANT:
-        GenericEmbeddingService expects `store` to be callable:
+      GenericEmbeddingService expects a store object exposing
+      ``store(session, record)``. Therefore we pass the
+      PgVectorStore instance itself, not its ``store`` method.
+      """
+      if self._generic is None:
+          pgvector_store = PgVectorStore()
 
-            await self.store(session, record)
+          self._generic = GenericEmbeddingService(
+              store=pgvector_store,
+          )
 
-        PgVectorStore itself is an object, so we pass its `store`
-        method rather than the PgVectorStore instance.
-        """
-
-        if self._generic is None:
-            # Binds the generic engine to the framework-owned Embedding ORM
-            # (PgVectorStore() resolves the model + dimensions centrally).
-            pgvector_store = PgVectorStore()
-
-            self._generic = GenericEmbeddingService(
-                store=pgvector_store.store,
-            )
-
-        return self._generic
+      return self._generic
 
     # ------------------------------------------------------------------
     # Source selection
@@ -489,15 +483,28 @@ class EmbeddingIngestionService:
                 if ticker
             ]
 
+            # Determine primary company: the one whose ticker appears most
+            # frequently in the content. This distinguishes "primary subject"
+            # from "merely mentioned" — a market roundup mentioning AAPL once
+            # should not be treated as AAPL-primary evidence.
+            primary_company_id = company_ids[0] if company_ids else None
+            if content and len(companies) > 1:
+                ticker_counts: dict[int, int] = {}
+                for cid, ticker in companies:
+                    if ticker:
+                        count = content.upper().count(ticker.upper())
+                        ticker_counts[cid] = ticker_counts.get(cid, 0) + count
+                if ticker_counts:
+                    primary_company_id = max(
+                        ticker_counts,
+                        key=ticker_counts.get,
+                    )
+
             metadata = self.embedding_service.build_metadata(
                 entity_type="news",
                 entity_id=news.id,
                 ticker=tickers[0] if tickers else None,
-                company_id=(
-                    company_ids[0]
-                    if company_ids
-                    else None
-                ),
+                company_id=primary_company_id,
                 source=news.source,
                 published_at=(
                     news.published_at.isoformat()
@@ -509,6 +516,7 @@ class EmbeddingIngestionService:
             # Preserve all company associations for multi-company news.
             if company_ids:
                 metadata["company_ids"] = company_ids
+                metadata["primary_company_id"] = primary_company_id
 
             if tickers:
                 metadata["tickers"] = tickers
@@ -725,6 +733,51 @@ class EmbeddingIngestionService:
         return count
 
     # ------------------------------------------------------------------
+    # SEC filings
+    # ------------------------------------------------------------------
+
+    async def embed_sec_filings(
+        self,
+        limit: int = 50,
+    ) -> int:
+        """Generate embeddings for unembedded SEC filing text chunks."""
+
+        filings = await self._select_unembedded(
+            SecFiling,
+            "sec_filing",
+            limit,
+        )
+        if not filings:
+            return 0
+
+        company_ids = {filing.company_id for filing in filings}
+        ticker_map = await self._ticker_map(company_ids)
+
+        items: list[tuple[str, int, str, dict[str, Any]]] = []
+        for filing in filings:
+            ticker = ticker_map.get(filing.company_id)
+            metadata = self.embedding_service.build_metadata(
+                entity_type="sec_filing",
+                entity_id=filing.id,
+                ticker=ticker,
+                company_id=filing.company_id,
+                published_at=(
+                    filing.filed_date.isoformat()
+                    if filing.filed_date
+                    else None
+                ),
+                source="SEC",
+            )
+            metadata["filing_type"] = filing.filing_type
+            metadata["fiscal_year"] = filing.fiscal_year
+            metadata["period"] = filing.period
+            items.append(("sec_filing", filing.id, filing.content, metadata))
+
+        count = await self._embed_and_store_batch(items)
+        logger.info("Embedded %d SEC filing chunks", count)
+        return count
+
+    # ------------------------------------------------------------------
     # All RAG sources
     # ------------------------------------------------------------------
 
@@ -738,16 +791,19 @@ class EmbeddingIngestionService:
             - news
             - market events
             - AI analyses
+            - SEC filings
         """
 
         news_count = await self.embed_news(limit)
         event_count = await self.embed_events(limit)
         analysis_count = await self.embed_analyses(limit)
+        filing_count = await self.embed_sec_filings(limit)
 
         counts = {
             "news": news_count,
             "events": event_count,
             "analyses": analysis_count,
+            "filings": filing_count,
         }
 
         logger.info(

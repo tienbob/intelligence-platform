@@ -1,23 +1,73 @@
 """
-Framework-owned ``embeddings`` ORM — generic pgvector vector index (Gate 4.2).
+Framework-owned ``embeddings`` ORM — generic pgvector vector index.
 
-The ``embeddings`` table serves **any** domain (Stock news/events/analyses,
-a future HR candidate/review, a legal case, …), so the model belongs to the
-framework, not to a domain layer. Identity is fully generic — the persistence
-equivalent of ``EntityRef``:
+The ``embeddings`` table is shared by all intelligence domains:
 
-    domain       which domain owns the entity                  (e.g. "stock")
-    entity_type  what kind of entity it is                     (e.g. "news")
-    entity_id    primary key of the entity in its domain table (e.g. news.id)
+    Stock:
+        news
+        events
+        analyses
+        SEC filings
 
-Domain-specific identifiers (``company_id``, ``ticker``, ``candidate_id``)
-are forbidden as columns; they belong in the JSONB ``metadata`` if a domain
-needs them for filtering. See ``docs/TABLE_OWNERSHIP.md`` (framework-owned) and
-``docs/INTELLIGENCE_PLATFORM_ARCHITECTURE_V3.md`` §11.1.
+    Future domains:
+        HR
+        legal
+        research
+        etc.
 
-Lives at ``app/intelligence/models/embeddings.py`` and is re-exported through
-``app.intelligence.embeddings`` so domains consume it via the framework
-contract surface.
+The model therefore belongs to the framework rather than any domain.
+
+Generic identity
+----------------
+
+Every embedding is identified by:
+
+    domain
+    entity_type
+    entity_id
+    embedding_model
+
+For example:
+
+    domain       = "stock"
+    entity_type  = "news"
+    entity_id    = 123
+    embedding_model = "text-embedding-3-small"
+
+Domain-specific identifiers such as:
+
+    company_id
+    ticker
+    candidate_id
+
+must NOT become columns on this table. They belong in ``metadata`` JSONB
+when a domain requires them for retrieval filtering.
+
+Architecture
+------------
+
+The framework owns:
+
+    - Embedding ORM
+    - pgvector column
+    - generic identity
+    - vector dimensions
+    - embedding model
+    - metadata storage
+    - indexes / uniqueness constraints
+
+Domains own:
+
+    - what gets embedded
+    - entity_type values
+    - embedding content
+    - domain metadata
+    - ingestion scheduling
+
+See:
+
+    docs/TABLE_OWNERSHIP.md
+    docs/INTELLIGENCE_PLATFORM_ARCHITECTURE_V3.md §11.1
 """
 
 from __future__ import annotations
@@ -25,83 +75,183 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
+from pgvector.utils import Vector as PgVector
 from sqlalchemy import (
     BigInteger,
     DateTime,
     Index,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from pgvector.sqlalchemy import Vector
-from pgvector.utils import Vector as PgVector
-
 from app.core.config import get_settings
 from app.core.database import Base
+
 
 settings = get_settings()
 
 
+# ---------------------------------------------------------------------------
+# Configuration validation
+# ---------------------------------------------------------------------------
+
+EMBEDDING_DIMENSIONS = int(settings.EMBEDDING_DIMENSIONS)
+EMBEDDING_MODEL = str(settings.EMBEDDING_MODEL).strip()
+
+if EMBEDDING_DIMENSIONS <= 0:
+    raise ValueError(
+        "EMBEDDING_DIMENSIONS must be greater than zero."
+    )
+
+if not EMBEDDING_MODEL:
+    raise ValueError(
+        "EMBEDDING_MODEL must not be empty."
+    )
+
+
 class AsyncVector(Vector):
     """
-    pgvector Vector type that passes values through to asyncpg's binary codec.
+    pgvector Vector type compatible with the application's asyncpg codec.
 
-    The stock ``Vector.bind_processor`` serializes the value to a text string
-    (``"[0.1, 0.2, ...]"``) before asyncpg sees it.  asyncpg's registered
-    binary codec (``register_vector``) then fails to encode that string as a
-    vector ("could not convert string to float").  This subclass overrides the
-    bind processor to return a ``pgvector.Vector`` object unchanged, so the
-    asyncpg binary codec receives the correct type.
+    Why this exists
+    ---------------
+
+    ``pgvector.sqlalchemy.Vector`` normally serializes a vector through its
+    bind processor.
+
+    This application registers pgvector's asyncpg binary codec in
+    ``app/core/database.py``.
+
+    The codec expects a pgvector-compatible value rather than an already
+    serialized text representation.
+
+    This type therefore passes a ``pgvector.Vector`` object through to the
+    driver unchanged.
+
+    The conversion is deliberately kept here at the database type boundary
+    rather than leaking pgvector-specific behavior into domain services.
     """
 
+    cache_ok = True
+
     def bind_processor(self, dialect):
+        """
+        Return a bind processor compatible with asyncpg's pgvector codec.
+        """
+
         def process(value):
             if value is None:
                 return None
-            if not isinstance(value, PgVector):
-                value = PgVector(value)
-            return value
+
+            if isinstance(value, PgVector):
+                return value
+
+            return PgVector(value)
 
         return process
 
 
 class Embedding(Base):
-    """pgvector embedding for generic RAG retrieval (Section 28)."""
+    """
+    Framework-owned generic pgvector embedding.
+
+    Identity:
+
+        (domain, entity_type, entity_id, embedding_model)
+
+    The vector dimensions are fixed by ``EMBEDDING_DIMENSIONS`` and must match
+    the PostgreSQL ``vector(N)`` column created by the migrations.
+
+    Domain-specific filtering information belongs in ``metadata`` JSONB.
+    """
 
     __tablename__ = "embeddings"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # ------------------------------------------------------------------
+    # Primary key
+    # ------------------------------------------------------------------
 
-    # ── Generic identity (architecture §11.1) ────────────────────
+    id: Mapped[int] = mapped_column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Generic identity
+    # ------------------------------------------------------------------
+
     domain: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True
-    )
-    entity_type: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True
-    )
-    entity_id: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, index=True
+        String(50),
+        nullable=False,
+        index=True,
     )
 
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    # pgvector column — width must match migrations 0002/0009 (vector(3072));
-    # the startup check in app/core/database.py verifies the live column.
+    entity_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+    )
+
+    entity_id: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        index=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Embedded source content
+    # ------------------------------------------------------------------
+
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Vector
+    # ------------------------------------------------------------------
+
     embedding: Mapped[list[float] | None] = mapped_column(
-        AsyncVector(settings.EMBEDDING_DIMENSIONS), nullable=True
+        AsyncVector(EMBEDDING_DIMENSIONS),
+        nullable=True,
     )
+
+    # ------------------------------------------------------------------
+    # Embedding model
+    # ------------------------------------------------------------------
+
     embedding_model: Mapped[str] = mapped_column(
-        String(100), nullable=False, default="text-embedding-3-small"
+        String(100),
+        nullable=False,
+        default=EMBEDDING_MODEL,
     )
-    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
+
+    # ------------------------------------------------------------------
+    # Domain-specific metadata
+    # ------------------------------------------------------------------
+
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata",
+        JSONB,
+        nullable=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Timestamps
+    # ------------------------------------------------------------------
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
+
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -109,12 +259,58 @@ class Embedding(Base):
         nullable=False,
     )
 
+    # ------------------------------------------------------------------
+    # Database indexes / constraints
+    # ------------------------------------------------------------------
+
     __table_args__ = (
-        Index("ix_embeddings_domain_entity", "domain", "entity_type", "entity_id"),
+        # Generic lookup:
+        #
+        #   WHERE domain = ?
+        #     AND entity_type = ?
+        #     AND entity_id = ?
+        #
+        Index(
+            "ix_embeddings_domain_entity",
+            "domain",
+            "entity_type",
+            "entity_id",
+        ),
+
+        # Model-aware lookup:
+        #
+        #   WHERE domain = ?
+        #     AND entity_type = ?
+        #     AND entity_id = ?
+        #     AND embedding_model = ?
+        #
+        Index(
+            "ix_embeddings_domain_entity_model",
+            "domain",
+            "entity_type",
+            "entity_id",
+            "embedding_model",
+        ),
+
+        # Prevent duplicate vectors for the same entity/model.
+        #
+        # This is especially important when multiple workers can ingest the
+        # same records concurrently.
+        UniqueConstraint(
+            "domain",
+            "entity_type",
+            "entity_id",
+            "embedding_model",
+            name="uq_embeddings_entity_model",
+        ),
     )
 
     def __repr__(self) -> str:
         return (
-            f"<Embedding(domain={self.domain!r}, entity_type={self.entity_type!r}, "
-            f"entity_id={self.entity_id})>"
+            "Embedding("
+            f"domain={self.domain!r}, "
+            f"entity_type={self.entity_type!r}, "
+            f"entity_id={self.entity_id!r}, "
+            f"embedding_model={self.embedding_model!r}"
+            ")"
         )

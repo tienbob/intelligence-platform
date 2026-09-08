@@ -1,19 +1,34 @@
 """
-pgvector persistence + duplicate detection.
+Generic pgvector persistence + duplicate detection.
 
-Owns the generic mechanics of writing vectors to (and checking
-membership in) an ``embeddings``-shaped table:
+Owns the generic mechanics of writing vectors to (and checking membership
+in) an ``embeddings``-shaped table:
 
-    - plain-list → pgvector.Vector conversion (asyncpg codec requirement)
-    - dimension validation against the configured table dimensions
-    - row construction and commit
-    - "already embedded" exclusion filters for dedup
+    - plain-list -> pgvector.Vector conversion
+    - dimension validation against configured table dimensions
+    - row construction
+    - duplicate / already-embedded detection
+    - optional model-aware deduplication
+    - transaction-safe persistence
 
-The concrete SQLAlchemy model is **framework-owned** and lives in
-``app/intelligence/models/embeddings.py`` (moved out of Stock in Gate 4.2);
-``PgVectorStore`` resolves to it by default. ``PgVectorStore`` remains
-parameterizable so a legitimate domain-owned model of the same shape could
-also be injected (injection is an access pattern, not ownership — §11.3).
+The concrete SQLAlchemy model is framework-owned and lives in:
+
+    app/intelligence/models/embeddings.py
+
+``PgVectorStore`` resolves to that model by default.
+
+The store remains parameterizable so a legitimate domain-owned model with
+the same shape can be injected. Injection is an access pattern, not ownership.
+
+Architecture note
+-----------------
+The framework owns the generic embeddings contract:
+
+    (domain, entity_type, entity_id, embedding_model)
+
+Domains decide what gets embedded and what metadata is attached.
+
+The persistence layer must not contain stock-specific knowledge.
 """
 
 from __future__ import annotations
@@ -31,27 +46,66 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def to_pgvector(vector: list[float], expected_dimensions: int) -> Any:
+def to_pgvector(
+    vector: list[float] | Any,
+    expected_dimensions: int,
+) -> Any:
     """
-    Convert a plain list to a pgvector.Vector and validate its dimension.
+    Convert a vector-like value to ``pgvector.Vector`` and validate its
+    dimensionality.
 
-    The conversion matters because asyncpg serializes a plain Python list
-    as text, which fails on the PostgreSQL ``vector`` column; the codec
-    registered in app/core/database.py expects pgvector instances.
+    ``asyncpg`` requires a pgvector-aware value for PostgreSQL ``vector``
+    columns. Passing a plain Python list can cause asyncpg to serialize the
+    value incorrectly.
+
+    Args:
+        vector:
+            Plain list of floats or an existing pgvector.Vector.
+        expected_dimensions:
+            Number of dimensions configured for the embeddings table.
+
+    Returns:
+        A validated ``pgvector.Vector``.
+
+    Raises:
+        ValueError:
+            If the vector is empty or has the wrong dimensionality.
     """
     from pgvector.utils import Vector as PgVector
 
-    if not isinstance(vector, PgVector):
-        vector = PgVector(vector)
+    if vector is None:
+        raise ValueError("Embedding vector cannot be None.")
 
-    dims = vector.dimensions() if hasattr(vector, "dimensions") else len(vector)
-    if dims != expected_dimensions:
+    if isinstance(vector, PgVector):
+        pg_vector = vector
+    else:
+        try:
+            values = list(vector)
+        except TypeError as exc:
+            raise ValueError(
+                f"Embedding vector must be an iterable of floats; "
+                f"received {type(vector).__name__}."
+            ) from exc
+
+        if not values:
+            raise ValueError("Embedding vector cannot be empty.")
+
+        pg_vector = PgVector(values)
+
+    dimensions = (
+        pg_vector.dimensions()
+        if hasattr(pg_vector, "dimensions")
+        else len(pg_vector)
+    )
+
+    if dimensions != expected_dimensions:
         raise ValueError(
-            f"Embedding has {dims} dimensions but the embeddings table "
-            f"expects {expected_dimensions}. Check EMBEDDING_MODEL and "
-            "EMBEDDING_DIMENSIONS consistency."
+            f"Embedding has {dimensions} dimensions but the embeddings "
+            f"table expects {expected_dimensions}. "
+            "Check EMBEDDING_MODEL and EMBEDDING_DIMENSIONS consistency."
         )
-    return vector
+
+    return pg_vector
 
 
 def unembedded_filter(
@@ -59,41 +113,93 @@ def unembedded_filter(
     target_model: type,
     entity_type: str,
     domain: str,
+    embedding_model_name: str | None = None,
 ) -> ColumnElement[bool]:
     """
-    Build a NOT EXISTS filter: rows of ``target_model`` that have no
-    embedding row yet for the given generic identity
-    ``(domain, entity_type, target row id)``. This is the dedup gate
-    used by ingestion workers so already-indexed content is never
-    re-embedded.
+    Build a NOT EXISTS filter for unembedded target rows.
+
+    An entity is considered already embedded when an embedding exists for:
+
+        (domain, entity_type, entity_id)
+
+    When ``embedding_model_name`` is supplied, the embedding model is also
+    part of the identity:
+
+        (domain, entity_type, entity_id, embedding_model)
+
+    Model-aware matching is important when changing embedding models. Without
+    it, an entity embedded using an old model would incorrectly be excluded
+    from ingestion using a new model.
 
     Args:
-        embedding_model: the framework's embedding ORM class (defaults to
-            ``app.intelligence.models.Embedding``; must expose ``domain`` /
-            ``entity_type`` / ``entity_id`` columns).
-        target_model: the domain content model (must expose ``id``).
-        entity_type: the entity_type value used when storing embeddings.
-        domain: the domain value used when storing embeddings (e.g. "stock").
+        embedding_model:
+            Framework embedding ORM model. Must expose:
+
+                domain
+                entity_type
+                entity_id
+                embedding_model
+
+        target_model:
+            Domain content model. Must expose ``id``.
+
+        entity_type:
+            Entity type stored in the embedding row.
+
+        domain:
+            Domain stored in the embedding row.
+
+        embedding_model_name:
+            Optional embedding model name. When supplied, deduplication only
+            considers embeddings generated by that model.
+
+    Returns:
+        SQLAlchemy boolean expression suitable for ``where()``.
     """
-    return ~exists(
-        select(1).where(
-            embedding_model.domain == domain,
-            embedding_model.entity_type == entity_type,
-            embedding_model.entity_id == target_model.id,
+    conditions = [
+        embedding_model.domain == domain,
+        embedding_model.entity_type == entity_type,
+        embedding_model.entity_id == target_model.id,
+    ]
+
+    if embedding_model_name is not None:
+        conditions.append(
+            embedding_model.embedding_model == embedding_model_name
         )
+
+    return ~exists(
+        select(1).where(*conditions)
     )
 
 
 class PgVectorStore:
     """
-    Persists ``VectorRecord`` objects into an embeddings-shaped table.
+    Generic persistence layer for ``VectorRecord`` objects.
 
-    The model defaults to the framework-owned ``Embedding`` ORM
-    (``app.intelligence.models.embeddings.Embedding``) so domains share one
-    canonical model/table; a caller may still inject a model, but ownership
-    of the ``embeddings`` schema stays with the framework (architecture
-    §11.3: injection is an access pattern, ownership is an architectural
-    decision).
+    The model defaults to the framework-owned:
+
+        app.intelligence.models.embeddings.Embedding
+
+    A custom model may be injected when necessary, but the generic embeddings
+    schema remains a framework concern.
+
+    Transaction behavior
+    --------------------
+    ``store()`` defaults to committing immediately for backwards compatibility
+    with existing callers.
+
+    For high-volume ingestion, callers can pass ``commit=False`` and commit
+    once after the whole batch. This avoids one database transaction per
+    embedding and gives the batch atomic transaction semantics.
+
+    Example:
+
+        await store.store(session, record, commit=False)
+        await store.store(session, record2, commit=False)
+        await commit_session(session)
+
+    If ``commit=False`` is used, ``flush()`` is performed so generated values
+    and constraint errors are surfaced before the caller commits.
     """
 
     def __init__(
@@ -101,54 +207,331 @@ class PgVectorStore:
         model: type | None = None,
         dimensions: int | None = None,
         default_model_name: str | None = None,
-    ):
+    ) -> None:
         from app.intelligence.models.embeddings import Embedding
 
         settings = get_settings()
+
         self.model = model or Embedding
-        self.dimensions = dimensions or settings.EMBEDDING_DIMENSIONS
+
+        configured_dimensions = (
+            dimensions
+            if dimensions is not None
+            else settings.EMBEDDING_DIMENSIONS
+        )
+
+        if not configured_dimensions or configured_dimensions <= 0:
+            raise ValueError(
+                "Embedding dimensions must be a positive integer."
+            )
+
+        self.dimensions = configured_dimensions
+
         self.default_model_name = (
-            default_model_name or settings.EMBEDDING_MODEL
+            default_model_name
+            or settings.EMBEDDING_MODEL
         )
 
-    async def store(self, session: AsyncSession, record: Any) -> Any:
-        """
-        Persist one record. ``record`` needs domain/entity_type/entity_id/
-        content/vector/model/metadata attributes. Commits via the caller's
-        session convention and returns the fresh row.
-        """
-        if not record.content or not record.content.strip():
-            raise ValueError("Cannot store an embedding for empty content.")
-        if not record.vector:
+        if not self.default_model_name:
             raise ValueError(
-                f"Embedding generation returned an empty vector for "
-                f"{record.domain}/{record.entity_type}/{record.entity_id}"
-            )
-        if not record.domain or not str(record.domain).strip():
-            raise ValueError(
-                "Cannot store an embedding without a domain: the embeddings "
-                "identity is (domain, entity_type, entity_id)."
+                "An embedding model name must be configured."
             )
 
-        embedding = to_pgvector(record.vector, self.dimensions)
+    async def store(
+        self,
+        session: AsyncSession,
+        record: Any,
+        *,
+        commit: bool = True,
+    ) -> Any:
+        """
+        Persist one embedding record.
+
+        ``record`` must expose:
+
+            domain
+            entity_type
+            entity_id
+            content
+            vector
+            model
+            metadata
+
+        Args:
+            session:
+                Active SQLAlchemy async session.
+
+            record:
+                VectorRecord-like object.
+
+            commit:
+                When True, commit immediately.
+                When False, flush only and leave transaction ownership
+                to the caller.
+
+        Returns:
+            The persisted ORM row.
+
+        Raises:
+            ValueError:
+                For invalid domain, entity identity, content, vector,
+                metadata, or vector dimensionality.
+        """
+        if session is None:
+            raise ValueError("An AsyncSession is required.")
+
+        domain = getattr(record, "domain", None)
+        entity_type = getattr(record, "entity_type", None)
+        entity_id = getattr(record, "entity_id", None)
+        content = getattr(record, "content", None)
+        vector = getattr(record, "vector", None)
+        model_name = getattr(record, "model", None)
+        metadata = getattr(record, "metadata", None)
+
+        if not domain or not str(domain).strip():
+            raise ValueError(
+                "Cannot store an embedding without a domain. "
+                "Embedding identity includes domain."
+            )
+
+        if not entity_type or not str(entity_type).strip():
+            raise ValueError(
+                "Cannot store an embedding without an entity_type."
+            )
+
+        if entity_id is None:
+            raise ValueError(
+                "Cannot store an embedding without an entity_id."
+            )
+
+        if content is None or not str(content).strip():
+            raise ValueError(
+                "Cannot store an embedding for empty content."
+            )
+
+        if vector is None:
+            raise ValueError(
+                f"Embedding generation returned no vector for "
+                f"{domain}/{entity_type}/{entity_id}."
+            )
+
+        if metadata is None:
+            metadata = {}
+
+        if not isinstance(metadata, dict):
+            raise ValueError(
+                "Embedding metadata must be a dictionary."
+            )
+
+        pg_vector = to_pgvector(
+            vector,
+            self.dimensions,
+        )
+
+        resolved_model_name = (
+            str(model_name).strip()
+            if model_name
+            else self.default_model_name
+        )
+
         row = self.model(
-            domain=record.domain,
-            entity_type=record.entity_type,
-            entity_id=record.entity_id,
-            content=record.content,
-            embedding=embedding,
-            embedding_model=record.model or self.default_model_name,
-            metadata_=record.metadata,
+            domain=str(domain).strip(),
+            entity_type=str(entity_type).strip(),
+            entity_id=entity_id,
+            content=str(content).strip(),
+            embedding=pg_vector,
+            embedding_model=resolved_model_name,
+            metadata_=metadata,
         )
+
         session.add(row)
-        await commit_session(session)
-        await session.refresh(row)
+
+        if commit:
+            await commit_session(session)
+        else:
+            # Flush rather than commit so DB constraints and generated values
+            # are available to the caller while transaction ownership remains
+            # with the batch operation.
+            await session.flush()
+
+        if getattr(row, "id", None) is not None:
+            await session.refresh(row)
 
         logger.info(
-            "Stored embedding for %s/%s/%s (%d dims)",
-            record.domain,
-            record.entity_type,
-            record.entity_id,
-            len(record.vector),
+            "Stored embedding for %s/%s/%s (%d dims, model=%s)",
+            domain,
+            entity_type,
+            entity_id,
+            self.dimensions,
+            resolved_model_name,
         )
+
         return row
+
+    async def store_batch(
+        self,
+        session: AsyncSession,
+        records: list[Any],
+        *,
+        commit: bool = True,
+    ) -> list[Any]:
+        """
+        Persist multiple embedding records efficiently.
+
+        With ``commit=True``:
+
+            all records are flushed and committed as one transaction.
+
+        With ``commit=False``:
+
+            records are flushed but transaction ownership remains with caller.
+
+        This method is preferable to repeatedly calling:
+
+            store(..., commit=True)
+
+        because it avoids one transaction per embedding.
+
+        Args:
+            session:
+                Active async SQLAlchemy session.
+
+            records:
+                Sequence of VectorRecord-like objects.
+
+            commit:
+                Whether this method owns the transaction commit.
+
+        Returns:
+            Persisted ORM rows.
+
+        Raises:
+            ValueError:
+                If records is empty or any record is invalid.
+        """
+        if not records:
+            return []
+
+        rows: list[Any] = []
+
+        try:
+            for record in records:
+                row = await self.store(
+                    session,
+                    record,
+                    commit=False,
+                )
+                rows.append(row)
+
+            if commit:
+                await commit_session(session)
+
+            logger.info(
+                "Stored %d embeddings in batch",
+                len(rows),
+            )
+
+            return rows
+
+        except Exception:
+            # The caller may choose to recover/retry the session. Explicitly
+            # rollback here because an IntegrityError leaves an AsyncSession
+            # unusable until rollback.
+            await session.rollback()
+
+            logger.exception(
+                "Failed to persist embedding batch; transaction rolled back"
+            )
+
+            raise
+
+    async def exists(
+        self,
+        session: AsyncSession,
+        *,
+        domain: str,
+        entity_type: str,
+        entity_id: Any,
+        embedding_model_name: str | None = None,
+    ) -> bool:
+        """
+        Check whether an embedding already exists.
+
+        Args:
+            session:
+                Active SQLAlchemy async session.
+
+            domain:
+                Embedding domain.
+
+            entity_type:
+                Generic entity type.
+
+            entity_id:
+                Source entity ID.
+
+            embedding_model_name:
+                Optional model name. When provided, only embeddings generated
+                by that model count as existing.
+
+        Returns:
+            True when a matching embedding exists.
+        """
+        conditions = [
+            self.model.domain == domain,
+            self.model.entity_type == entity_type,
+            self.model.entity_id == entity_id,
+        ]
+
+        if embedding_model_name is not None:
+            conditions.append(
+                self.model.embedding_model == embedding_model_name
+            )
+
+        result = await session.execute(
+            select(
+                exists().where(*conditions)
+            )
+        )
+
+        return bool(result.scalar())
+
+    async def delete(
+        self,
+        session: AsyncSession,
+        *,
+        domain: str,
+        entity_type: str,
+        entity_id: Any,
+        embedding_model_name: str | None = None,
+        commit: bool = True,
+    ) -> int:
+        """
+        Delete embeddings for a generic entity identity.
+
+        Primarily useful for explicit re-indexing.
+
+        Returns:
+            Number of rows deleted.
+        """
+        from sqlalchemy import delete
+
+        conditions = [
+            self.model.domain == domain,
+            self.model.entity_type == entity_type,
+            self.model.entity_id == entity_id,
+        ]
+
+        if embedding_model_name is not None:
+            conditions.append(
+                self.model.embedding_model == embedding_model_name
+            )
+
+        result = await session.execute(
+            delete(self.model).where(*conditions)
+        )
+
+        if commit:
+            await commit_session(session)
+
+        return int(result.rowcount or 0)

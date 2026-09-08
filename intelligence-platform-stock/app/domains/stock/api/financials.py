@@ -84,9 +84,33 @@ async def get_financial_metrics(
     if not metric:
         # Self-heal: compute metrics on-demand if they don't exist yet
         from app.domains.stock.scoring.fundamental_analysis import FundamentalAnalysisEngine
+        from sqlalchemy import func
+
         metric = await FundamentalAnalysisEngine(db).calculate_and_store(company.id)
         if not metric:
-            raise HTTPException(status_code=404, detail=f"No metrics for {ticker}")
+            statement_count = await db.scalar(
+                select(func.count(FinancialStatement.id)).where(
+                    FinancialStatement.company_id == company.id
+                )
+            )
+            if not statement_count:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "code": "fundamental_data_unavailable",
+                        "message": f"No financial statements available for {ticker}",
+                        "ticker": ticker.upper(),
+                        "reason": "Financial metrics require statement data; quote data alone is insufficient.",
+                    },
+                )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "metrics_calculation_failed",
+                    "message": f"Financial metrics could not be calculated for {ticker}",
+                    "ticker": ticker.upper(),
+                },
+            )
     return FinancialMetricResponse.model_validate(metric)
 
 

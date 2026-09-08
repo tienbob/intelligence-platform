@@ -87,12 +87,15 @@ class InvestmentRecommendation(BaseModel):
 class ConfidenceBreakdown(BaseModel):
     """Separate confidence components (Phase B).
 
-    ``overall`` is computed by Python, not by the LLM.
+    ``overall`` is computed by Python, not by the LLM, and is capped by the
+    evidence component: zero retrieved evidence and/or unsupported claims
+    make high confidence impossible.
     """
 
     data: float = Field(ge=0, le=1)
     quantitative: float = Field(ge=0, le=1)
     llm: float = Field(ge=0, le=1)
+    evidence: float = Field(ge=0, le=1)
     overall: float = Field(ge=0, le=1)
 
 
@@ -109,8 +112,12 @@ class AnalysisResponse(BaseModel):
     risk_score: Optional[float] = None
     confidence: Optional[float] = None
     confidence_breakdown: Optional[ConfidenceBreakdown] = None
+    confidence_provenance: dict[str, Any] = Field(default_factory=dict)
     source_backed_claims: list[dict[str, Any]] = Field(default_factory=list)
     analysis: Optional[dict[str, Any]] = None
+    snapshots: dict[str, Any] = Field(default_factory=dict)
+    rag_context: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
     recommendation: Optional[InvestmentRecommendation] = None
     created_at: Optional[str] = None
 

@@ -1,24 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCompanies } from '../services/api';
-import StatusChip from '../components/StatusChip';
+import { getCompanies, deleteCompany } from '../services/api';
+import { useToast } from '../components/Toast';
 
 export default function Companies() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState('');
+  const [pendingDelete, setPendingDelete] = useState(null);
+
+  const loadCompanies = useCallback(async () => {
+    try {
+      const data = await getCompanies({ limit: 100 });
+      setCompanies(data?.companies || []);
+    } catch {
+      // API not available
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const data = await getCompanies({ limit: 100 });
-        setCompanies(data?.companies || []);
-      } catch {
-        // API not available
-      }
-    }
-    load();
-  }, []);
+    loadCompanies();
+  }, [loadCompanies]);
 
   const filtered = companies.filter((c) => {
     const q = search.trim().toLowerCase();
@@ -30,6 +33,27 @@ export default function Companies() {
       (c.industry || '').toLowerCase().includes(q)
     );
   });
+
+  function confirmDelete(company) {
+    setPendingDelete(company);
+  }
+
+  function cancelDelete() {
+    setPendingDelete(null);
+  }
+
+  async function executeDelete() {
+    if (!pendingDelete) return;
+    const ticker = pendingDelete.ticker;
+    setPendingDelete(null);
+    try {
+      await deleteCompany(ticker);
+      toast(`${ticker} deleted`, 'success');
+      await loadCompanies();
+    } catch (err) {
+      toast(err.message || `Failed to delete ${ticker}`, 'error');
+    }
+  }
 
   return (
     <div>
@@ -66,6 +90,7 @@ export default function Companies() {
                 <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Sector</th>
                 <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Industry</th>
                 <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold text-right">Market Cap</th>
+                <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="text-sm data-font text-on-surface">
@@ -73,24 +98,63 @@ export default function Companies() {
                 filtered.map((c, i) => (
                   <tr
                     key={c.id}
-                    onClick={() => navigate(`/companies/${c.ticker}`)}
                     className={`${
                       i % 2 === 0 ? 'bg-surface' : 'bg-surface-dim'
-                    } border-b border-outline-variant hover:bg-surface-variant transition-colors group cursor-pointer`}
+                    } border-b border-outline-variant hover:bg-surface-variant transition-colors group`}
                   >
-                    <td className="py-2 px-4 font-bold">{c.ticker}</td>
-                    <td className="py-2 px-4">{c.name}</td>
-                    <td className="py-2 px-4 text-on-surface-variant">{c.exchange}</td>
-                    <td className="py-2 px-4">{c.sector}</td>
-                    <td className="py-2 px-4 text-on-surface-variant">{c.industry}</td>
-                    <td className="py-2 px-4 text-right">
+                    <td
+                      className="py-2 px-4 font-bold cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
+                      {c.ticker}
+                    </td>
+                    <td
+                      className="py-2 px-4 cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
+                      {c.name}
+                    </td>
+                    <td
+                      className="py-2 px-4 text-on-surface-variant cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
+                      {c.exchange}
+                    </td>
+                    <td
+                      className="py-2 px-4 cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
+                      {c.sector}
+                    </td>
+                    <td
+                      className="py-2 px-4 text-on-surface-variant cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
+                      {c.industry}
+                    </td>
+                    <td
+                      className="py-2 px-4 text-right cursor-pointer"
+                      onClick={() => navigate(`/companies/${c.ticker}`)}
+                    >
                       {c.market_cap ? `$${(c.market_cap / 1e9).toFixed(1)}B` : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-right">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          confirmDelete(c);
+                        }}
+                        className="p-1.5 rounded hover:bg-error-container/30 text-on-surface-variant hover:text-error transition-colors opacity-0 group-hover:opacity-100"
+                        title={`Delete ${c.ticker}`}
+                      >
+                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                      </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-on-surface-variant">
+                  <td colSpan={7} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">business</span>
                     <p>No companies tracked yet. Start by ingesting market data.</p>
                   </td>
@@ -100,6 +164,36 @@ export default function Companies() {
           </table>
         </div>
       </div>
+
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="card max-w-md w-full mx-4 !p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <span className="material-symbols-outlined text-error text-2xl">warning</span>
+              <div>
+                <h3 className="text-lg font-semibold text-on-surface">
+                  Delete {pendingDelete.ticker}?
+                </h3>
+                <p className="text-sm text-on-surface-variant mt-1">
+                  This will permanently remove <strong>{pendingDelete.name}</strong> and all
+                  of its analysis records. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button onClick={cancelDelete} className="btn-secondary btn-sm">
+                Cancel
+              </button>
+              <button
+                onClick={executeDelete}
+                className="btn-sm px-4 py-2 rounded font-semibold bg-error-container text-on-error-container hover:opacity-90 transition-opacity"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

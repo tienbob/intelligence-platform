@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.core.database import commit_session
 from app.domains.stock.models.financial import FinancialMetric, FinancialStatement
+from app.domains.stock.models.company import Company
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,9 @@ class FundamentalAnalysisEngine:
         return (current - previous) / abs(previous)
 
     def calculate_metrics(
-        self, statements: list[FinancialStatement]
+        self,
+        statements: list[FinancialStatement],
+        market_cap: float | None = None,
     ) -> dict[str, float | None]:
         """Calculate all fundamental metrics from statements."""
         if not statements:
@@ -100,12 +103,45 @@ class FundamentalAnalysisEngine:
             metrics["earnings_growth"] = None
             metrics["fcf_growth"] = None
 
-        # Valuation (requires market data — would be set from price * shares)
-        # These are placeholders; in production, fetch from market data
-        metrics["pe_ratio"] = None  # Set from price / EPS
-        metrics["ps_ratio"] = None  # Set from market_cap / revenue
-        metrics["pb_ratio"] = None  # Set from market_cap / equity
-        metrics["ev_ebitda"] = None  # Set from EV / EBITDA
+        # Valuation uses trailing twelve-month fundamentals and the canonical
+        # company market cap. Do not manufacture EV/EBITDA without EBITDA data.
+        trailing = statements[-4:] if len(statements) >= 4 else statements
+        trailing_revenue = sum(
+            value for value in (s.revenue for s in trailing) if value is not None
+        )
+        trailing_net_income = sum(
+            value for value in (s.net_income for s in trailing) if value is not None
+        )
+        trailing_fcf = sum(
+            value for value in (s.free_cash_flow for s in trailing) if value is not None
+        )
+        if market_cap is not None and market_cap > 0:
+            metrics["pe_ratio"] = (
+                market_cap / trailing_net_income
+                if trailing_net_income > 0
+                else None
+            )
+            metrics["ps_ratio"] = (
+                market_cap / trailing_revenue
+                if trailing_revenue > 0
+                else None
+            )
+            metrics["pb_ratio"] = (
+                market_cap / latest.shareholders_equity
+                if latest.shareholders_equity and latest.shareholders_equity > 0
+                else None
+            )
+            metrics["fcf_yield"] = (
+                trailing_fcf / market_cap
+                if trailing_fcf > 0
+                else None
+            )
+        else:
+            metrics["pe_ratio"] = None
+            metrics["ps_ratio"] = None
+            metrics["pb_ratio"] = None
+            metrics["fcf_yield"] = None
+        metrics["ev_ebitda"] = None
 
         return metrics
 
@@ -116,7 +152,11 @@ class FundamentalAnalysisEngine:
             logger.warning("No financial statements for company_id=%d", company_id)
             return None
 
-        metrics = self.calculate_metrics(statements)
+        company = await self.session.get(Company, company_id)
+        metrics = self.calculate_metrics(
+            statements,
+            market_cap=company.market_cap if company else None,
+        )
 
         metric = FinancialMetric(
             company_id=company_id,

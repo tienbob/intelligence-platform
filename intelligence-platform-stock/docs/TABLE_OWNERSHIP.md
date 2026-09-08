@@ -101,6 +101,7 @@ exercise them through the same public paths.
 | `raw_news` | `RawNews` |
 | `raw_sec_filings` | `RawSecFiling` |
 | `risk_metrics` | `RiskMetric` |
+| `sec_filings` | `SecFiling` |
 | `stock_prices` | `StockPrice` |
 | `technical_indicators` | `TechnicalIndicator` |
 

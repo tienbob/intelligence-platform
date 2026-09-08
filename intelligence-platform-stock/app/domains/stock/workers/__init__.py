@@ -12,6 +12,7 @@ from app.domains.stock.workers.event_worker import analyze_events
 from app.domains.stock.workers.event_worker import detect_anomalies
 from app.domains.stock.workers.ingestion_worker import ingest_fundamentals
 from app.domains.stock.workers.ingestion_worker import ingest_macro_indicators
+from app.domains.stock.workers.ingestion_worker import ingest_sec_filings
 from app.domains.stock.workers.embedding_worker import ingest_rag_embeddings
 from app.domains.stock.workers.news_worker import process_news
 from app.domains.stock.workers.market_worker import update_market_data
@@ -23,6 +24,7 @@ __all__ = [
     "ingest_fundamentals",
     "ingest_macro_indicators",
     "ingest_rag_embeddings",
+    "ingest_sec_filings",
     "process_news",
     "recalculate_scores",
     "run_scheduled_backtests",

@@ -51,6 +51,7 @@ STOCK_OWNED_TABLES: frozenset[str] = frozenset(
         "raw_news",
         "raw_sec_filings",
         "risk_metrics",
+        "sec_filings",
         "stock_prices",
         "technical_indicators",
     }

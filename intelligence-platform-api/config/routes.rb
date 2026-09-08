@@ -30,6 +30,7 @@ Rails.application.routes.draw do
       get "stocks/:ticker/prices",          to: "proxy#stocks_prices"
       get "companies",                      to: "proxy#companies"
       get "companies/:ticker",              to: "proxy#company"
+      delete "companies/:ticker",           to: "proxy#company_delete"
       get "prices/:ticker",                 to: "proxy#prices"
       get "financials/:ticker/statements",  to: "proxy#financial_statements"
       get "financials/:ticker/metrics",     to: "proxy#financial_metrics"

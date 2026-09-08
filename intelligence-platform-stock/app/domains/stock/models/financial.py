@@ -9,11 +9,50 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.domains.stock.models.base import ProvenanceMixin, TimestampMixin
+
+
+class SecFiling(Base, TimestampMixin):
+    """Canonical SEC filing text chunk for RAG retrieval.
+
+    Each row is a human-readable rendering of one reporting period's XBRL
+    facts, derived from the authoritative SEC EDGAR source. These chunks are
+    embedded and retrieved by the RAG service so that financial claims
+    (revenue, net income, cash flow, debt, guidance, risk disclosures) can be
+    audited against the primary source.
+
+    One row per (company_id, fiscal_year, period, form).
+    """
+
+    __tablename__ = "sec_filings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("companies.id"), nullable=False, index=True
+    )
+    cik: Mapped[str | None] = mapped_column(String(20), index=True)
+    filing_type: Mapped[str | None] = mapped_column(String(20))  # 10-K | 10-Q | 8-K
+    fiscal_year: Mapped[str | None] = mapped_column(String(10))
+    period: Mapped[str | None] = mapped_column(String(10))  # FY | Q1 | Q2 | Q3 | Q4
+    form: Mapped[str | None] = mapped_column(String(20))
+    filed_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="SEC")
+
+    __table_args__ = (
+        Index(
+            "ix_sec_filings_company_period",
+            "company_id",
+            "fiscal_year",
+            "period",
+            "form",
+            unique=True,
+        ),
+    )
 
 
 class FinancialStatement(Base, TimestampMixin, ProvenanceMixin):

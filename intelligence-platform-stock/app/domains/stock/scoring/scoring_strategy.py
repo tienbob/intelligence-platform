@@ -17,6 +17,7 @@ Weights (target):
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from app.core.database import async_session_factory
@@ -78,9 +79,20 @@ class InvestmentScoringStrategy:
                     f"No Company record found for ticker '{ticker}'"
                 )
 
-            score_row = await InvestmentScoringEngine(session).calculate_score(
-                company.id
-            )
+            engine = InvestmentScoringEngine(session)
+            calculate_score = engine.calculate_score
+            if "context" in inspect.signature(calculate_score).parameters:
+                snapshots = getattr(context, "domain_snapshots", {}) or {}
+                score_row = await calculate_score(
+                    company.id,
+                    context={
+                        "fundamental_snapshot": snapshots.get(
+                            "fundamental_snapshot", {}
+                        )
+                    },
+                )
+            else:
+                score_row = await calculate_score(company.id)
 
         result = {
             "score": float(score_row.overall_score),

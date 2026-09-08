@@ -2,22 +2,35 @@
 Stock Domain Manifest — wires the stock domain into the intelligence platform.
 
 This is the entry point discovered by the DomainRegistry.
-It adapts the existing stock-specific code to the DomainModule protocol.
 
-IMPORTANT: This file imports from the original market-intelligence codebase.
-When migrating, copy the relevant modules into this domain pack and update imports.
+The domain manifest adapts stock-specific providers, normalizers, context
+construction, scoring, background tasks, APIs, prompts, and evidence
+attribution to the domain-neutral IntelligencePlatform.
+
+Integrity invariants
+--------------------
+1. The framework owns orchestration; the stock domain owns stock semantics.
+2. Evidence attribution is bound to the entity being analyzed.
+3. Canonical financial claims are resolved against the canonical fundamental
+   snapshot belonging to the current ticker.
+4. Provider/source provenance is preserved for source-backed claims.
+5. Deterministic scoring remains the authoritative investment decision.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
-# ── Domain identity ─────────────────────────────────────────────
+
+# ---------------------------------------------------------------------------
+# Domain identity
+# ---------------------------------------------------------------------------
+
 DOMAIN_NAME = "stock"
 DOMAIN_VERSION = "1.0"
 
-# Version of the prompt pack under prompts/ (analysis provenance reports
-# this as ``prompt_version`` alongside ``prompt_name``; see V3 §19.3).
+# Version of the prompt pack under prompts/. Analysis provenance reports this
+# alongside prompt_name and is intentionally independent of domain version.
 PROMPT_VERSION = "1.0"
 
 
@@ -25,21 +38,25 @@ class StockDomain:
     """
     Stock & Investment Intelligence domain module.
 
-    Implements the DomainModule protocol so the core intelligence engine
-    can discover and use this domain without knowing about stocks specifically.
+    Implements the DomainModule protocol so the core intelligence engine can
+    discover and use this domain without knowing about stocks specifically.
     """
 
     name = DOMAIN_NAME
     version = DOMAIN_VERSION
 
-    # ── Providers ───────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Providers
+    # ------------------------------------------------------------------
 
     def get_providers(self) -> dict[str, Any]:
         """
         Return stock-specific data providers.
 
-        Each provider fetches raw data from an external source (FMP, SEC, FRED, etc.)
-        and returns it as a list of dicts.
+        Providers may expose the generic ``fetch(entity_ref)`` protocol for
+        request-time ingestion. Worker-owned stock providers may intentionally
+        expose capability-specific methods instead; the framework pipeline
+        handles those as persisted/worker-fed providers.
         """
         from app.domains.stock.providers import (
             FMPProvider,
@@ -57,13 +74,15 @@ class StockDomain:
             "massive": MassiveProvider(),
         }
 
-    # ── Normalizers ─────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Normalizers
+    # ------------------------------------------------------------------
 
     def get_normalizers(self) -> dict[str, Any]:
-        """Return stock-specific data normalizers.
+        """
+        Return stock-specific normalization handlers.
 
-        Values are the domain's normalization callables (one per data
-        kind) — the same functions used by ingestion/normalization.
+        Keys correspond to provider/source names used by the generic pipeline.
         """
         from app.domains.stock.normalization import (
             events,
@@ -85,33 +104,47 @@ class StockDomain:
             "event": events.normalize_event,
         }
 
-    # ── Context Builder ─────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Context builder
+    # ------------------------------------------------------------------
 
     def get_context_builder(self) -> Any:
         """
         Return the stock-specific context builder.
 
-        Builds structured context for LLM analysis including:
-        market snapshot, technical indicators, fundamentals, news, events, macro, risk.
+        The builder produces canonical stock snapshots for:
+
+            market
+            technical
+            fundamental
+            news
+            events
+            macro
+            risk
         """
         from app.domains.stock.context_builder import StockContextBuilder
 
         return StockContextBuilder()
 
-    # ── Scoring Strategy ────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Scoring strategy
+    # ------------------------------------------------------------------
 
     def get_scoring_strategy(self) -> Any:
         """
         Return the stock-specific investment scoring strategy.
 
-        Computes: fundamental (30%) + valuation (20%) + growth (15%) +
-        technical (10%) + sentiment (10%) + catalysts (10%) - risk (15%).
+        The scoring implementation computes the deterministic investment
+        decision from canonical domain data. LLM narrative must not become a
+        substitute for deterministic score inputs.
         """
         from app.domains.stock.scoring import InvestmentScoringStrategy
 
         return InvestmentScoringStrategy()
 
-    # ── Intelligence Tasks ──────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Intelligence tasks
+    # ------------------------------------------------------------------
 
     def get_intelligence_tasks(self) -> list[Any]:
         """Return stock-specific background tasks for the scheduler."""
@@ -122,6 +155,7 @@ class StockDomain:
             ingest_fundamentals,
             ingest_macro_indicators,
             ingest_rag_embeddings,
+            ingest_sec_filings,
             process_news,
             recalculate_scores,
             run_scheduled_backtests,
@@ -130,13 +164,13 @@ class StockDomain:
         )
 
         class _Task:
-            """Simple wrapper to satisfy the IntelligenceTask protocol."""
+            """Simple wrapper satisfying the IntelligenceTask protocol."""
 
             def __init__(
                 self,
                 name: str,
                 interval_minutes: int,
-                fn: Callable,
+                fn: Callable[..., Any],
                 run_immediately: bool = True,
             ):
                 self.name = name
@@ -145,30 +179,83 @@ class StockDomain:
                 self.run_immediately = run_immediately
 
             async def execute(self) -> None:
-                await self._fn()
+                result = self._fn()
+
+                # Supports both async and sync worker functions.
+                if hasattr(result, "__await__"):
+                    await result
 
         return [
-            _Task("Update market data", 5, update_market_data),
-            _Task("Process news", 10, process_news),
-            _Task("Detect anomalies", 15, detect_anomalies),
-            _Task("Analyze events", 60, analyze_events),
-            _Task("Update derived metrics", 60, update_derived_metrics),
-            _Task("Recalculate scores", 1440, recalculate_scores),
-            _Task("Ingest fundamentals", 1440, ingest_fundamentals),
-            _Task("Ingest macro indicators", 1440, ingest_macro_indicators),
-            _Task("Ingest RAG embeddings", 1440, ingest_rag_embeddings),
+            _Task(
+                "Update market data",
+                5,
+                update_market_data,
+            ),
+            _Task(
+                "Process news",
+                10,
+                process_news,
+            ),
+            _Task(
+                "Detect anomalies",
+                15,
+                detect_anomalies,
+            ),
+            _Task(
+                "Analyze events",
+                60,
+                analyze_events,
+            ),
+            _Task(
+                "Update derived metrics",
+                60,
+                update_derived_metrics,
+            ),
+            _Task(
+                "Recalculate scores",
+                1440,
+                recalculate_scores,
+            ),
+            _Task(
+                "Ingest fundamentals",
+                1440,
+                ingest_fundamentals,
+            ),
+            _Task(
+                "Ingest SEC filings",
+                1440,
+                ingest_sec_filings,
+            ),
+            _Task(
+                "Ingest macro indicators",
+                1440,
+                ingest_macro_indicators,
+            ),
+            _Task(
+                "Ingest RAG embeddings",
+                1440,
+                ingest_rag_embeddings,
+            ),
             # Point-in-time snapshot for look-ahead-free backtesting.
-            # run_immediately=True (the default) means a fresh environment
-            # gets its first snapshot at startup instead of waiting 24h —
-            # previously this job only lived in a hardcoded scheduler that
-            # was never started, so the snapshots table stayed empty.
-            _Task("Create daily backtest snapshot", 1440, create_daily_snapshot),
-            # Drain any 'queued' backtest runs left behind by an API restart
-            # mid-execution (POST /runs normally executes synchronously).
-            _Task("Run scheduled backtests", 60, run_scheduled_backtests),
+            #
+            # run_immediately=True means a fresh environment gets its first
+            # snapshot at startup instead of waiting 24h.
+            _Task(
+                "Create daily backtest snapshot",
+                1440,
+                create_daily_snapshot,
+            ),
+            # Drain queued backtest runs left behind by an API restart.
+            _Task(
+                "Run scheduled backtests",
+                60,
+                run_scheduled_backtests,
+            ),
         ]
 
-    # ── API Router ──────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # API
+    # ------------------------------------------------------------------
 
     def get_api_router(self):
         """Return the stock-specific FastAPI router."""
@@ -178,56 +265,177 @@ class StockDomain:
 
     def get_internal_router(self):
         """
-        Return the internal service-to-service router (Rails→Python gateway).
+        Return the internal service-to-service router.
 
-        Reuses the domain's endpoint routers but authenticates via the
-        internal service key instead of user JWTs. Mounted at /internal by
-        main.py through the DomainModule contract.
+        Used by the Rails → Python gateway and mounted by main.py through the
+        DomainModule contract.
         """
         from app.domains.stock.api.internal_router import internal_router
 
         return internal_router
 
-    # ── Prompts ─────────────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # Prompts
+    # ------------------------------------------------------------------
 
-    def get_prompts(self) -> PromptRegistry:
-        """Return the stock domain's prompt registry."""
+    def get_prompts(self):
+        """
+        Return the stock domain prompt registry.
+
+        Prompt files are registered both under their filename stem and, for
+        ``*_analysis`` prompts, under the corresponding analysis type.
+        """
         from pathlib import Path
 
         from app.intelligence.prompts import SimplePromptRegistry
 
         prompts_dir = Path(__file__).parent / "prompts"
         registry = SimplePromptRegistry()
-        for prompt_file in prompts_dir.glob("*.txt"):
-            text = prompt_file.read_text()
-            registry.register(prompt_file.stem, text)
-            # Alias by analysis type ("company_analysis" → "company") so
-            # the domain-neutral pipeline can request prompts by
-            # ``AnalysisRequest.analysis_type`` without knowing file names.
+
+        for prompt_file in sorted(prompts_dir.glob("*.txt")):
+            text = prompt_file.read_text(encoding="utf-8")
+
+            registry.register(
+                prompt_file.stem,
+                text,
+            )
+
+            # Alias "company_analysis" -> "company", etc.
             if prompt_file.stem.endswith("_analysis"):
-                registry.register(prompt_file.stem[: -len("_analysis")], text)
+                registry.register(
+                    prompt_file.stem[
+                        : -len("_analysis")
+                    ],
+                    text,
+                )
+
         return registry
 
-    # ── Evidence attribution (optional, §32) ─────────────────────
+    # ------------------------------------------------------------------
+    # Evidence attribution
+    # ------------------------------------------------------------------
 
-    def get_evidence_attributor(self, context):
-        """Supply claim→source attribution to the generic LLM stage.
-
-        The framework pipeline calls this (when present) and passes the
-        result to the LLM service as ``evidence_attributor``, so analyses
-        running through the generic pipeline keep source-attributed claims
-        exactly like ``framework_path.analyze_llm`` and the legacy worker.
-        ``context`` is the dict the pipeline builds for the LLM (contains
-        ``rag_context``).
+    def get_evidence_attributor(
+        self,
+        context: dict[str, Any] | None = None,
+    ):
         """
-        from app.domains.stock.scoring.evidence import EvidenceAttributor
+        Supply stock-specific claim→source attribution to the generic LLM stage.
 
-        attributor = EvidenceAttributor()
-        rag = context.get("rag_context", {}) if isinstance(context, dict) else {}
-        attributor.register_sources(rag)
+        The framework passes the complete LLM context here. This factory binds
+        the evidence resolver to:
+
+            - the current ticker/entity,
+            - optional company ID,
+            - the canonical fundamental snapshot,
+            - the canonical financial provider,
+            - the RAG evidence registry.
+
+        IMPORTANT:
+
+        An LLM ``source`` block is only a reference candidate. It becomes
+        supported only after StockEvidenceAttributor resolves it against the
+        canonical snapshot and source provenance.
+        """
+        from app.domains.stock.scoring.evidence import (
+            StockEvidenceAttributor,
+        )
+
+        context = context if isinstance(context, dict) else {}
+
+        # --------------------------------------------------------------
+        # Current entity
+        # --------------------------------------------------------------
+        entity = (
+            context.get("entity")
+            if isinstance(context.get("entity"), dict)
+            else {}
+        )
+
+        ticker = (
+            entity.get("ticker")
+            or entity.get("id")
+        )
+
+        if ticker is not None:
+            ticker = str(ticker).upper().strip()
+
+        company_id = entity.get("company_id")
+
+        # Some contexts may expose company identity under entity_id.
+        if company_id is None:
+            company_id = entity.get("entity_id")
+
+        # --------------------------------------------------------------
+        # Canonical fundamental snapshot
+        # --------------------------------------------------------------
+        fundamental = (
+            context.get("fundamental_snapshot")
+            if isinstance(
+                context.get("fundamental_snapshot"),
+                dict,
+            )
+            else {}
+        )
+
+        latest_statement = (
+            fundamental.get("latest_statement")
+            if isinstance(
+                fundamental.get("latest_statement"),
+                dict,
+            )
+            else {}
+        )
+
+        canonical_source = latest_statement.get("source")
+
+        # --------------------------------------------------------------
+        # Construct the entity-bound attributor
+        # --------------------------------------------------------------
+        attributor = StockEvidenceAttributor(
+            fundamental_snapshot=fundamental,
+            ticker=ticker,
+            company_id=company_id,
+            default_source_type="financial_statement",
+            default_source_name=canonical_source,
+        )
+
+        # --------------------------------------------------------------
+        # Register RAG evidence
+        # --------------------------------------------------------------
+        rag_context = (
+            context.get("rag_context")
+            if isinstance(
+                context.get("rag_context"),
+                dict,
+            )
+            else {}
+        )
+
+        attributor.register_sources(rag_context)
+
+        # --------------------------------------------------------------
+        # Make canonical provenance available to the attributor/diagnostics.
+        # --------------------------------------------------------------
+        #
+        # These attributes are additive and do not change the generic
+        # EvidenceAttributor contract.
+        attributor.analysis_entity = {
+            "ticker": ticker,
+            "company_id": company_id,
+            "entity_type": entity.get("entity_type"),
+        }
+
+        attributor.canonical_financial_source = canonical_source
+        attributor.canonical_financial_period = latest_statement.get(
+            "period"
+        )
+
         return attributor
 
 
-# ── Module-level instance (discovered by registry) ──────────────
-DOMAIN = StockDomain()
+# ---------------------------------------------------------------------------
+# Module-level instance discovered by DomainRegistry
+# ---------------------------------------------------------------------------
 
+DOMAIN = StockDomain()

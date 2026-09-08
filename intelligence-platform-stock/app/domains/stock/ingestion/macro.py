@@ -72,6 +72,7 @@ class MacroIngestion:
 
             count = 0
             skipped = 0
+            duplicates = 0
             for obs in observations:
                 ts = obs.get("timestamp")
                 if isinstance(ts, str) or isinstance(ts, (int, float)):
@@ -109,6 +110,7 @@ class MacroIngestion:
                         validation_result.errors,
                     )
                     skipped += 1
+                    duplicates += 1
                     continue
 
                 insert_stmt = insert(EconomicIndicator).values(
@@ -139,7 +141,23 @@ class MacroIngestion:
                 skipped,
                 indicator_id,
             )
-            return {"success": True, "inserted": count, "skipped": skipped, "error": None}
+            observed_timestamps = []
+            for obs in observations:
+                if obs.get("timestamp") is not None:
+                    timestamp = self.provider._normalize_timestamp(obs["timestamp"])
+                    if timestamp is not None:
+                        observed_timestamps.append(timestamp)
+            latest_observed_at = max(observed_timestamps, default=None)
+            return {
+                "success": True,
+                "fetched": len(observations),
+                "inserted": count,
+                "skipped": skipped,
+                "duplicates": duplicates,
+                "latest_observed_at": latest_observed_at.isoformat() if latest_observed_at else None,
+                "fresh": bool(is_fresh),
+                "error": None,
+            }
 
         except ProviderError as exc:
             logger.error("Failed to ingest macro indicator %s: %s", indicator_id, exc)

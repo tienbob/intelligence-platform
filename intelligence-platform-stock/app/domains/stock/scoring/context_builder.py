@@ -28,6 +28,30 @@ from sqlalchemy import desc, select
 logger = get_logger(__name__)
 
 
+def market_window_stats(
+    latest_close: float | None,
+    highs: list[float | None],
+    lows: list[float | None],
+) -> tuple[float | None, float | None]:
+    """(high, low) over the trailing window INCLUDING the latest bar.
+
+    Contract: the window includes the latest observation, so the returned
+    high is always >= latest_close and the low always <= latest_close
+    (whenever latest_close is a positive number). Non-positive highs/lows
+    are treated as unavailable — quote-based ingestion can fabricate 0.0
+    for missing OHLC fields, which previously allowed
+    ``price_high_30d < latest_price`` (an impossible state).
+    """
+    valid_highs = [h for h in highs if h is not None and h > 0]
+    valid_lows = [v for v in lows if v is not None and v > 0]
+    if latest_close is not None and latest_close > 0:
+        valid_highs.append(latest_close)
+        valid_lows.append(latest_close)
+    high = max(valid_highs) if valid_highs else None
+    low = min(valid_lows) if valid_lows else None
+    return high, low
+
+
 class ContextBuilder:
     """
     Builds structured context for the LLM research analyst.
@@ -57,14 +81,20 @@ class ContextBuilder:
         latest = prices[0]
         prev = prices[1] if len(prices) > 1 else None
 
+        valid_volumes = [
+            p.volume for p in prices if p.volume is not None and p.volume > 0
+        ]
+        high_30d, low_30d = market_window_stats(
+            latest.close, [p.high for p in prices], [p.low for p in prices]
+        )
         return {
             "latest_price": latest.close,
-            "latest_volume": latest.volume,
+            "latest_volume": valid_volumes[0] if valid_volumes else None,
             "latest_date": latest.timestamp.isoformat(),
             "price_change_1d": ((latest.close - prev.close) / prev.close) if prev and prev.close else None,
-            "price_high_30d": max(p.high for p in prices),
-            "price_low_30d": min(p.low for p in prices),
-            "avg_volume_30d": sum(p.volume for p in prices) / len(prices),
+            "price_high_30d": high_30d,
+            "price_low_30d": low_30d,
+            "avg_volume_30d": sum(valid_volumes) / len(valid_volumes) if valid_volumes else None,
         }
 
     async def build_technical_snapshot(self, company_id: int) -> dict[str, Any]:
@@ -113,6 +143,17 @@ class ContextBuilder:
             .limit(4)
         )
         statements = list(stmt_result.scalars().all())
+        latest_statement = statements[0] if statements else None
+        derived_metrics = {}
+        if latest_statement and latest_statement.revenue:
+            if latest_statement.net_income is not None:
+                derived_metrics["net_margin"] = (
+                    latest_statement.net_income / latest_statement.revenue
+                )
+            if latest_statement.gross_profit is not None:
+                derived_metrics["gross_margin"] = (
+                    latest_statement.gross_profit / latest_statement.revenue
+                )
 
         return {
             "metrics": {
@@ -126,30 +167,41 @@ class ContextBuilder:
                 "revenue_growth": metrics.revenue_growth if metrics else None,
                 "earnings_growth": metrics.earnings_growth if metrics else None,
                 "fcf_growth": metrics.fcf_growth if metrics else None,
-            } if metrics else {},
+            } if metrics else derived_metrics,
             "latest_statement": {
-                "period": statements[0].period if statements else None,
-                "revenue": statements[0].revenue if statements else None,
-                "net_income": statements[0].net_income if statements else None,
-                "free_cash_flow": statements[0].free_cash_flow if statements else None,
-                "total_debt": statements[0].total_debt if statements else None,
-                "source": getattr(statements[0], "source", None) if statements else None,
+                "period": latest_statement.period if latest_statement else None,
+                "revenue": latest_statement.revenue if latest_statement else None,
+                "net_income": latest_statement.net_income if latest_statement else None,
+                "free_cash_flow": latest_statement.free_cash_flow if latest_statement else None,
+                "total_debt": latest_statement.total_debt if latest_statement else None,
+                "source": getattr(latest_statement, "source", None) if latest_statement else None,
             } if statements else {},
         }
 
     async def build_news_snapshot(self, company_id: int, limit: int = 10) -> dict[str, Any]:
         """Build recent news snapshot."""
         from app.domains.stock.models.news import CompanyNews
+        from app.domains.stock.models.company import Company
 
         result = await self.session.execute(
             select(News)
             .join(CompanyNews, CompanyNews.news_id == News.id)
             .where(CompanyNews.company_id == company_id)
             .order_by(desc(News.published_at))
-            .limit(limit)
+            .limit(limit * 5)
         )
         news_items = result.scalars().all()
+        company = await self.session.get(Company, company_id)
+        ticker = company.ticker.upper() if company else ""
+        company_name = (company.name or "").lower() if company else ""
+        company_token = company_name.replace(" inc.", "").split()[0] if company_name else ""
+        news_items = [
+            item for item in news_items
+            if ticker in (item.title or "").upper()
+            or (company_token and company_token in (item.title or "").lower())
+        ]
 
+        news_items = news_items[:limit]
         return {
             "recent_news": [
                 {

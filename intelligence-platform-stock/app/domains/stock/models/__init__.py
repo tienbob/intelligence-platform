@@ -25,7 +25,7 @@ from app.domains.stock.models.analysis import (
 )
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.event import EventPriceCorrelation, MarketEvent
-from app.domains.stock.models.financial import FinancialMetric, FinancialStatement
+from app.domains.stock.models.financial import FinancialMetric, FinancialStatement, SecFiling
 from app.domains.stock.models.macro import EconomicIndicator
 from app.domains.stock.models.news import CompanyNews, News
 from app.domains.stock.models.raw import RawMacroData, RawMarketData, RawNews, RawSecFiling
@@ -37,6 +37,7 @@ __all__ = [
     "StockPrice",
     "FinancialStatement",
     "FinancialMetric",
+    "SecFiling",
     "News",
     "CompanyNews",
     "MarketEvent",

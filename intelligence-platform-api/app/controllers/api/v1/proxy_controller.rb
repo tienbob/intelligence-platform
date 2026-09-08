@@ -41,6 +41,13 @@ module Api
         render_python(:get, "/companies/#{params[:ticker]}")
       end
 
+      def company_delete
+        PythonClient.delete("/companies/#{params[:ticker]}", user: current_user)
+        head :no_content
+      rescue PythonClient::PythonError => e
+        render json: { detail: e.body }, status: e.status
+      end
+
       # ── Prices ──────────────────────────────────────────────
       def prices
         render_python(:get, "/prices/#{params[:ticker]}", query: request.query_parameters)

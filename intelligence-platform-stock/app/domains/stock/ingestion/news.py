@@ -151,7 +151,7 @@ class NewsIngestion:
                 limit,
             )
 
-            return await self._store_news(news_items)
+            return await self._store_news(news_items, target_ticker=ticker)
 
         except ProviderError as exc:
             await self.session.rollback()
@@ -330,6 +330,7 @@ class NewsIngestion:
     async def _store_one_news(
         self,
         item: dict[str, Any],
+        target_ticker: str | None = None,
     ) -> tuple[News | None, bool]:
         """
         Process and store one news item.
@@ -453,6 +454,12 @@ class NewsIngestion:
             title=title,
             content=item.get("content"),
         )
+        if target_ticker:
+            target = target_ticker.upper()
+            companies = [
+                entry for entry in companies
+                if entry[0].ticker.upper() == target
+            ]
 
         # ---------------------------------------------------------
         # Link news to companies
@@ -483,6 +490,7 @@ class NewsIngestion:
     async def _store_news(
         self,
         news_items: list[dict[str, Any]],
+        target_ticker: str | None = None,
     ) -> int:
         """
         Store news items with deduplication and company linking.
@@ -500,7 +508,9 @@ class NewsIngestion:
                 # This is critical: a normal session.rollback() here would
                 # undo successful work from earlier articles in this batch.
                 async with self.session.begin_nested():
-                    _, was_inserted = await self._store_one_news(item)
+                    _, was_inserted = await self._store_one_news(
+                        item, target_ticker=target_ticker
+                    )
 
                 if was_inserted:
                     count += 1
