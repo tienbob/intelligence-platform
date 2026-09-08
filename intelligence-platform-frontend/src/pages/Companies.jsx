@@ -8,6 +8,7 @@ export default function Companies() {
   const toast = useToast();
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState('');
+  const [showNonStock, setShowNonStock] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
 
   const loadCompanies = useCallback(async () => {
@@ -24,6 +25,8 @@ export default function Companies() {
   }, [loadCompanies]);
 
   const filtered = companies.filter((c) => {
+    // Instrument-type gate first, independent of the search term.
+    if (!showNonStock && c.instrument_type !== 'common_stock') return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -76,6 +79,15 @@ export default function Companies() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          <label className="flex items-center gap-2 text-sm text-on-surface-variant cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showNonStock}
+              onChange={(e) => setShowNonStock(e.target.checked)}
+              className="accent-secondary-container"
+            />
+            Show non-stock instruments
+          </label>
         </div>
       </div>
 
@@ -106,7 +118,20 @@ export default function Companies() {
                       className="py-2 px-4 font-bold cursor-pointer"
                       onClick={() => navigate(`/companies/${c.ticker}`)}
                     >
-                      {c.ticker}
+                      <span className="inline-flex items-center gap-1.5">
+                        {c.ticker}
+                        {c.instrument_type && c.instrument_type !== 'common_stock' && (
+                          <span
+                            className={`text-[10px] px-1.5 py-0.5 rounded font-sans font-medium uppercase tracking-wide ${
+                              c.instrument_type === 'unknown'
+                                ? 'bg-surface-variant text-on-surface-variant'
+                                : 'bg-secondary-container/20 text-secondary-fixed border border-secondary-container/40'
+                            }`}
+                          >
+                            {c.instrument_type === 'unknown' ? 'unclassified' : c.instrument_type.replace('_', ' ')}
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td
                       className="py-2 px-4 cursor-pointer"

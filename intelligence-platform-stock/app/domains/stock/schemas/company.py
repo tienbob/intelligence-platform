@@ -28,6 +28,7 @@ class CompanyResponse(CompanyBase):
     isin: Optional[str] = None
     cik: Optional[str] = None
     cusip: Optional[str] = None
+    instrument_type: str = "unknown"
 
 
 class CompanyListResponse(BaseModel):

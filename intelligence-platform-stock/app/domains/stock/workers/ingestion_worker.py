@@ -113,6 +113,51 @@ async def ingest_fundamentals() -> None:
         )
 
 
+async def backfill_instrument_types() -> None:
+    """
+    One-time backfill: classify ``instrument_type`` for companies still
+    marked ``unknown``.
+
+    Reuses the existing ``ingest_company_profile()`` path (single source of
+    truth for classification) rather than a bespoke classifier. Processes in
+    bounded batches with per-row error isolation and logging; no new worker
+    architecture.
+
+    Run once after the 0022 migration:
+        await backfill_instrument_types()
+    """
+    from app.domains.stock.normalization.companies import INSTRUMENT_TYPE_UNKNOWN
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Company.id, Company.ticker)
+            .where(Company.instrument_type == INSTRUMENT_TYPE_UNKNOWN)
+            .limit(500)
+        )
+        companies = result.all()
+
+        ingestion = FundamentalsIngestion(session)
+        updated = 0
+
+        for company_id, ticker in companies:
+            try:
+                await ingestion.ingest_company_profile(ticker)
+                updated += 1
+            except Exception as exc:
+                await session.rollback()
+                logger.error(
+                    "Backfill classification failed for %s: %s",
+                    ticker,
+                    exc,
+                )
+
+        logger.info(
+            "Instrument-type backfill processed %d companies",
+            len(companies),
+        )
+        return updated
+
+
 async def ingest_macro_indicators() -> None:
     """Ingest macroeconomic indicators from the configured provider."""
 

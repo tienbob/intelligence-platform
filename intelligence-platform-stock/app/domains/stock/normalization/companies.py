@@ -48,6 +48,54 @@ def normalize_company_name(name: str) -> str:
     return name.lower()
 
 
+# Canonical instrument types (docs/PLAN_INSTRUMENT_TYPE.md).
+INSTRUMENT_TYPE_COMMON_STOCK = "common_stock"
+INSTRUMENT_TYPE_ETF = "etf"
+INSTRUMENT_TYPE_MUTUAL_FUND = "mutual_fund"
+INSTRUMENT_TYPE_UNKNOWN = "unknown"
+
+
+def classify_instrument(profile: dict[str, Any] | None) -> str:
+    """
+    Map a provider company profile to a canonical ``instrument_type``.
+
+    Returns ``unknown`` when the profile is missing, and otherwise relies on
+    the provider's explicit instrument flags. It never defaults a *present*
+    profile to ``common_stock`` just because classification failed — the
+    only thing it asserts is whether the provider tagged it as an ETF or a
+    mutual fund. ADRs are intentionally left as ``common_stock`` (an ADR is
+    a foreign company's listed equity, not a fund).
+
+    FMP contract (verified 2026-09-08 against the FMP changelog):
+        ``isEtf``  → exchange-traded fund
+        ``isFund`` → mutual fund
+        ``isAdr``  → depositary receipt (still a stock for analysis purposes)
+    """
+    if not profile:
+        return INSTRUMENT_TYPE_UNKNOWN
+
+    if profile.get("isEtf"):
+        return INSTRUMENT_TYPE_ETF
+
+    if profile.get("isFund"):
+        return INSTRUMENT_TYPE_MUTUAL_FUND
+
+    return INSTRUMENT_TYPE_COMMON_STOCK
+
+
+def is_company_analysis_target(
+    instrument_type: str | None,
+) -> bool:
+    """
+    Whether an entity should flow through company-style fundamentals/analysis.
+
+    ETFs, mutual funds, and unclassified entities are tracked (prices/news)
+    but excluded from company analysis — an ETF has no XBRL financial
+    statements or income statement in the company sense.
+    """
+    return instrument_type == INSTRUMENT_TYPE_COMMON_STOCK
+
+
 class EntityResolver:
     """
     Resolves different provider representations to a canonical company.

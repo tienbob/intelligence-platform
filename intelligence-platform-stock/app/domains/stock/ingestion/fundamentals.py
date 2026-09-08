@@ -68,7 +68,11 @@ from app.domains.stock.models.financial import (
 )
 from app.domains.stock.models.raw import RawSecFiling
 
-from app.domains.stock.normalization.companies import EntityResolver
+from app.domains.stock.normalization.companies import (
+    EntityResolver,
+    classify_instrument,
+    is_company_analysis_target,
+)
 
 from app.domains.stock.providers import (
     FMPProvider,
@@ -336,6 +340,10 @@ class FundamentalsIngestion:
         cusip = profile.get("cusip")
         cik = profile.get("cik")
 
+        # Classify the instrument type from the profile flags (single source
+        # of truth — docs/PLAN_INSTRUMENT_TYPE.md).
+        instrument_type = classify_instrument(profile)
+
         updated = False
 
         # Replace the ticker-fallback name whenever a real company name is
@@ -343,6 +351,12 @@ class FundamentalsIngestion:
         # empty, which never triggers for a stub whose name is the ticker.
         if name and (not company.name or company.name == company.ticker):
             company.name = name
+            updated = True
+
+        # Always (re)assert the instrument type; it is derived from the
+        # profile, not "filled only if missing".
+        if company.instrument_type != instrument_type:
+            company.instrument_type = instrument_type
             updated = True
 
         def _set_if_missing(attr: str, value: Any) -> None:
@@ -389,9 +403,19 @@ class FundamentalsIngestion:
 
         Returns the number of newly inserted canonical statement rows.
         """
-        try:
-            company = await self._get_company(ticker)
+        company = await self._get_company(ticker)
 
+        # Non-stock instruments (ETF/mutual fund) have no company-style
+        # financial statements; skip rather than persisting empty rows.
+        if not is_company_analysis_target(company.instrument_type):
+            logger.info(
+                "Skipping FMP statement ingestion for %s (instrument_type=%s)",
+                ticker,
+                company.instrument_type,
+            )
+            return 0
+
+        try:
             income_statements = (
                 await self.fmp.get_income_statement(ticker)
             )

@@ -21,6 +21,7 @@ from app.domains.stock.services.company_analysis import execute_company_analysis
 from app.domains.stock.scoring.risk import RiskEngine
 from app.domains.stock.scoring.technical_analysis import TechnicalAnalysisEngine
 from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
+from app.domains.stock.normalization.companies import is_company_analysis_target
 from sqlalchemy import select
 
 logger = get_logger(__name__)
@@ -44,6 +45,16 @@ async def recalculate_scores() -> None:
         builder = ContextBuilder(session)
 
         for company in companies:
+            # Non-stock instruments (ETF/mutual fund/unknown) are tracked for
+            # price/news but excluded from company-style scoring (an ETF has
+            # no income statement/balance sheet in the company sense).
+            if not is_company_analysis_target(company.instrument_type):
+                logger.info(
+                    "Skipping score recalculation for %s (instrument_type=%s)",
+                    company.ticker,
+                    company.instrument_type,
+                )
+                continue
             try:
                 snapshot = await builder.build_fundamental_snapshot(
                     company.id
@@ -93,6 +104,15 @@ async def run_company_analysis(company_id: int) -> Analysis | None:
         company = await session.get(Company, company_id)
         if not company:
             logger.error("Company not found: %d", company_id)
+            return None
+
+        # Non-stock instruments are excluded from company-style analysis.
+        if not is_company_analysis_target(company.instrument_type):
+            logger.info(
+                "Skipping analysis for %s (instrument_type=%s)",
+                company.ticker,
+                company.instrument_type,
+            )
             return None
 
         try:
