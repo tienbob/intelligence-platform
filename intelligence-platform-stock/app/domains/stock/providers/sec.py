@@ -216,6 +216,10 @@ class SECProvider(FundamentalDataProvider):
             "eps": ["EarningsPerShareBasic"],
         }
 
+        # ``start``/``end`` carry the XBRL reporting window. Duration facts
+        # (income, cash flow) report BOTH a ~3-month quarterly window and a
+        # ~6-month year-to-date window inside the same (fy, fp, form) group,
+        # so downstream selection needs the window to tell them apart.
         results: list[dict[str, Any]] = []
         for concept_name, aliases in income_concepts.items():
             for alias in aliases:
@@ -231,6 +235,8 @@ class SECProvider(FundamentalDataProvider):
                                     "fiscal_year": dp.get("fy"),
                                     "form": dp.get("form"),
                                     "filed": dp.get("filed"),
+                                    "start": dp.get("start"),
+                                    "end": dp.get("end"),
                                     "unit": unit,
                                     "source": "SEC",
                                 })
@@ -246,11 +252,18 @@ class SECProvider(FundamentalDataProvider):
         balance_concepts = {
             "total_assets": ["Assets"],
             "total_liabilities": ["Liabilities"],
-            "total_debt": ["LongTermDebt", "DebtLongtermAndShorttermCombined"],
+            # IMPORTANT: prefer the COMBINED long+short-term concept first.
+            # LongTermDebt is a component of debt, not "total debt" — using
+            # it whenever Apple (or another filer) also reports the combined
+            # concept made the RAG/alignment path report a different number
+            # than FMP's combined totalDebt for the same quarter.
+            "total_debt": ["DebtLongtermAndShorttermCombined", "LongTermDebt"],
             "cash": ["CashAndCashEquivalentsAtCarryingValue"],
             "shareholders_equity": ["StockholdersEquity"],
         }
 
+        # Instant facts: ``start`` is emitted as None (XBRL instants carry
+        # only ``end``); duration-aware selection never applies here.
         results: list[dict[str, Any]] = []
         for concept_name, aliases in balance_concepts.items():
             for alias in aliases:
@@ -266,6 +279,8 @@ class SECProvider(FundamentalDataProvider):
                                     "fiscal_year": dp.get("fy"),
                                     "form": dp.get("form"),
                                     "filed": dp.get("filed"),
+                                    "start": dp.get("start"),
+                                    "end": dp.get("end"),
                                     "unit": unit,
                                     "source": "SEC",
                                 })
@@ -299,6 +314,8 @@ class SECProvider(FundamentalDataProvider):
                                     "fiscal_year": dp.get("fy"),
                                     "form": dp.get("form"),
                                     "filed": dp.get("filed"),
+                                    "start": dp.get("start"),
+                                    "end": dp.get("end"),
                                     "unit": unit,
                                     "source": "SEC",
                                 })

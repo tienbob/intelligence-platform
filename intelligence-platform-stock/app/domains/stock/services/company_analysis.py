@@ -18,6 +18,7 @@ Canonical contract: docs/PLAN_ANALYSIS_CONTRACT.md
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -543,9 +544,20 @@ def _filter_verified_claims(
 #
 # The goal is NOT to validate the numbers against a source (that requires
 # canonical-fact resolution which only the structured-source path does). The
-# goal is purely to make the evidence gap VISIBLE: an unvalidated number in
-# the narrative is either validated (appears in claim_validation) or flagged
-# and stripped. It never silently survives.
+# goal is to make the evidence gap VISIBLE: a number in the narrative is
+# either validated (appears in claim_validation) or flagged and stripped. It
+# never silently survives.
+#
+# One IMPORTANT exception closes the false-positive gap: a number that is not
+# covered by an existing claim_validation entry may still be CONSISTENT WITH
+# the canonical fundamental snapshot (e.g. "Apple's total debt stood at
+# $84.31 billion" matches ``latest_statement.total_debt`` =
+# 84,307,000,000). Before flagging an uncovered numeric assertion as
+# unsupported, we cross-check it against the deterministic fundamental
+# snapshot (values + period if the canonical period is present). When it
+# matches, the entry is marked ``supported`` with
+# ``validation_mode = "canonical_snapshot"`` so the narrative filter keeps a
+# correct, self-consistent figure instead of needlessly suppressing it.
 
 
 # Matches a numeric fact in prose: optional comparison prefix ("from", "to",
@@ -604,6 +616,183 @@ def _extract_numeric_assertions(text: str) -> list[str]:
         assertions.append(assertion)
 
     return assertions
+
+
+# ---------------------------------------------------------------------------
+# Canonical-snapshot cross-check
+# ---------------------------------------------------------------------------
+#
+# Uncovered numeric assertions used to be flagged unsupported purely because
+# no retrieved document restated the number. That classification ignored the
+# fact that the deterministic fundamental snapshot IS canonical structured
+# data — a number matching it is verifiable, not unsupported. The helpers
+# below parse a prose amount and compare it against the snapshot fields.
+
+# Word/symbol multipliers accepted in prose amounts ("$84.31 billion",
+# "$31.91B", "$1.2 trillion", "50.1%").
+_CANONICAL_WORD_UNITS: dict[str, float] = {
+    "trillion": 1e12,
+    "billion": 1e9,
+    "million": 1e6,
+    "thousand": 1e3,
+    "tn": 1e12,
+    "bn": 1e9,
+    "mn": 1e6,
+    "t": 1e12,
+    "b": 1e9,
+    "m": 1e6,
+    "k": 1e3,
+}
+
+# Canonical snapshot keys that carry statement AMOUNTS (dollars).
+_CANONICAL_AMOUNT_KEYS = (
+    "revenue",
+    "net_income",
+    "gross_profit",
+    "operating_income",
+    "total_assets",
+    "total_liabilities",
+    "total_debt",
+    "cash",
+    "shareholders_equity",
+    "operating_cash_flow",
+    "free_cash_flow",
+    "capital_expenditure",
+    "eps",
+)
+
+# Canonical snapshot keys that carry RATIOS (stored 0..1 or as ratios).
+_CANONICAL_RATIO_KEYS = (
+    "gross_margin",
+    "net_margin",
+    "operating_margin",
+    "debt_to_equity",
+    "debt_equity",
+    "fcf_yield",
+    "roe",
+    "roa",
+    "revenue_growth",
+    "revenue_growth_yoy",
+    "earnings_growth",
+    "fcf_growth",
+    "pe_ratio",
+    "ps_ratio",
+    "pb_ratio",
+)
+
+# Prose numbers are rounded for display ("$84.31 billion" vs 84,307,000,000
+# is ~0.004% off; "$31.91 billion" vs 31,914,000,000 is ~0.013% off). A 1%
+# relative tolerance accepts prose rounding while still rejecting numbers
+# that merely resemble a canonical figure.
+_CANONICAL_MATCH_REL_TOLERANCE = 0.01
+
+
+def _parse_assertion_amount(assertion: str) -> tuple[float | None, bool]:
+    """Parse a prose numeric assertion into ``(amount, was_percent)``.
+
+    Examples:
+        "of $84.31 billion"  -> (84310000000,  False)
+        "at $31.91B"          -> (31910000000,  False)
+        "50.1%"               -> (50.1,         True)
+        "27.23 percent"       -> (27.23,        True)
+    """
+    text = str(assertion or "").strip()
+
+    if not text:
+        return None, False
+
+    match = re.search(
+        r"([\d,]+(?:\.\d+)?)\s*"
+        r"(trillion|billion|million|thousand|tn|bn|mn|[tbmk])?",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None, False
+
+    try:
+        amount = float(match.group(1).replace(",", ""))
+    except ValueError:
+        return None, False
+
+    unit = (match.group(2) or "").lower()
+
+    multiplier = _CANONICAL_WORD_UNITS.get(unit, 1.0)
+
+    return amount * multiplier, "%" in text
+
+
+def _canonical_snapshot_match(
+    assertion: str,
+    fundamental_snapshot: dict[str, Any],
+) -> tuple[str, Any, Any] | None:
+    """Return ``(canonical_key, canonical_value, canonical_period)`` when a
+    prose amount matches a canonical fundamental snapshot value.
+
+    Both plain amounts and percentages are supported. Percentages are
+    compared against the snapshot's ratio fields on both the ``27.23%`` and
+    the ``0.2723`` representations.
+    """
+    if not isinstance(fundamental_snapshot, dict) or not fundamental_snapshot:
+        return None
+
+    assertion_amount, assertion_percent = _parse_assertion_amount(assertion)
+
+    if assertion_amount is None:
+        return None
+
+    latest = fundamental_snapshot.get("latest_statement")
+
+    if not isinstance(latest, dict):
+        latest = {}
+
+    candidates: dict[str, Any] = {}
+
+    for key in (*_CANONICAL_AMOUNT_KEYS, *_CANONICAL_RATIO_KEYS):
+        for source in (latest, fundamental_snapshot):
+            value = source.get(key)
+
+            if value is None or isinstance(value, (dict, list)):
+                continue
+
+            candidates[key] = value
+            break
+
+    if not candidates:
+        return None
+
+    canonical_period = (
+        latest.get("period")
+        or fundamental_snapshot.get("period")
+    )
+
+    for key, raw in candidates.items():
+        try:
+            canonical_value = float(raw)
+        except (TypeError, ValueError):
+            continue
+
+        if not math.isfinite(canonical_value):
+            continue
+
+        # Mirror the source-block resolver: a bare percent (27.23%) is also
+        # compared against its 0..1 ratio representation (0.2723).
+        comparisons = [assertion_amount]
+
+        if assertion_percent or abs(assertion_amount) > 1.5:
+            comparisons.append(assertion_amount / 100.0)
+
+        for comparison in comparisons:
+            if math.isclose(
+                comparison,
+                canonical_value,
+                rel_tol=_CANONICAL_MATCH_REL_TOLERANCE,
+                abs_tol=1e-6,
+            ):
+                return key, canonical_value, canonical_period
+
+    return None
 
 
 def _claim_texts(claim_validation: list[dict[str, Any]]) -> set[str]:
@@ -674,15 +863,20 @@ def _numeric_assertion_covered(
 def _augment_claim_validation_with_numeric_assertions(
     llm_output: dict[str, Any],
     claim_validation: list[dict[str, Any]],
+    fundamental_snapshot: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Find numeric assertions in the free-text fields that aren't covered by
-    any existing claim_validation entry, and append them as unsupported.
+    any existing claim_validation entry, and append them.
 
     Free-text fields are the ones the structured validation loop never
-    visits. Each uncovered numeric assertion becomes an
-    unsupported/unavailable claim_validation entry so the narrative filter
-    can strip the sentence hosting it.
+    visits. Each uncovered numeric assertion first gets a canonical-snapshot
+    cross-check (``fundamental_snapshot``): when the amount matches a
+    deterministic canonical financial value within prose tolerance, the entry
+    is appended as ``supported`` with
+    ``validation_mode = "canonical_snapshot"`` so the narrative filter keeps
+    the sentence. Only assertions that match NO canonical value are appended
+    as unsupported/unavailable for the narrative filter to strip.
     """
     if not isinstance(claim_validation, list):
         claim_validation = []
@@ -746,16 +940,41 @@ def _augment_claim_validation_with_numeric_assertions(
     augmented = list(claim_validation)
 
     for assertion in candidates:
-        augmented.append(
-            {
-                "claim": assertion,
-                "status": "unsupported",
-                "evidence_status": "unavailable",
-                "evidence_ids": [],
-                "validation_mode": "numeric_extraction",
-                "source": "free_text",
-            }
+        # Prefer a canonical-snapshot consistency check over a blanket
+        # "unsupported" label: a number matching our own deterministic
+        # structured financial data is verified, not unverifiable.
+        canonical_match = _canonical_snapshot_match(
+            assertion,
+            fundamental_snapshot or {},
         )
+
+        if canonical_match is not None:
+            canonical_metric, canonical_value, canonical_period = canonical_match
+
+            augmented.append(
+                {
+                    "claim": assertion,
+                    "status": "supported",
+                    "evidence_status": "available",
+                    "evidence_ids": [],
+                    "validation_mode": "canonical_snapshot",
+                    "source": "fundamental_snapshot",
+                    "canonical_metric": canonical_metric,
+                    "canonical_value": canonical_value,
+                    "canonical_period": canonical_period,
+                }
+            )
+        else:
+            augmented.append(
+                {
+                    "claim": assertion,
+                    "status": "unsupported",
+                    "evidence_status": "unavailable",
+                    "evidence_ids": [],
+                    "validation_mode": "numeric_extraction",
+                    "source": "free_text",
+                }
+            )
 
     return augmented
 
@@ -1229,15 +1448,23 @@ async def _execute_framework(
     claim_validation = claim_validation_audit
 
     # Surface numeric assertions embedded in free-text fields that the
-    # structured validation loop never visits. Any number not already
-    # covered by a claim_validation entry is appended as
-    # unsupported/unavailable so the narrative filter can strip the hosting
-    # sentence — closing the gap where a compound sentence's secondary fact
-    # (e.g. a Q1 comparison figure) floated through unchecked.
+    # structured validation loop never visits. Each uncovered number is
+    # first cross-checked against the canonical fundamental snapshot (a
+    # number consistent with our own deterministic structured data is
+    # verified, not unsupported); only numbers that match NO canonical
+    # value are appended as unsupported/unavailable so the narrative
+    # filter can strip the hosting sentence — closing the gap where a
+    # compound sentence's secondary fact (e.g. a Q1 comparison figure)
+    # floated through unchecked.
+    fundamental_snapshot = (
+        meta_src.get("domain_snapshots") or {}
+    ).get("fundamental_snapshot") or {}
+
     claim_validation = (
         _augment_claim_validation_with_numeric_assertions(
             llm_output,
             claim_validation,
+            fundamental_snapshot=fundamental_snapshot,
         )
     )
 

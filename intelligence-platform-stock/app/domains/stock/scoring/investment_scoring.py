@@ -218,6 +218,12 @@ class InvestmentScoringEngine:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.data_quality = DataQualityEngine(session)
+        # Component breakdown from the most recent _score_valuation call on
+        # this engine (single scoring-run lifetime). calculate_score reads
+        # it for the band-saturation diagnostic; _score_valuation resets it
+        # before resolving so a snapshot-fallback run can never inherit a
+        # previous run's breakdown.
+        self._last_valuation_components: dict[str, float] = {}
 
     @staticmethod
     def _normalize(value: float | None, min_val: float, max_val: float, invert: bool = False) -> float:
@@ -349,6 +355,11 @@ class InvestmentScoringEngine:
         fundamental_snapshot: dict[str, Any] | None = None,
     ) -> float:
         """Score valuation attractiveness (0-100)."""
+        # Reset the component breakdown first: the snapshot-fallback return
+        # below must never leave a previous run's breakdown in place for
+        # the saturation diagnostic to read.
+        self._last_valuation_components = {}
+
         result = await self.session.execute(
             select(FinancialMetric)
             .where(FinancialMetric.company_id == company_id)
@@ -384,30 +395,121 @@ class InvestmentScoringEngine:
             # "Valuation score: 50" seen across every AAPL/NVDA sample.)
             return self._score_valuation_snapshot(fundamental_snapshot)
 
-        scores = []
-        # P/E: 5-40 → 100-0 (lower is better)
         pe_ratio = getattr(valuation_values, "pe_ratio", None)
         ps_ratio = getattr(valuation_values, "ps_ratio", None)
         pb_ratio = getattr(valuation_values, "pb_ratio", None)
         fcf_yield = getattr(valuation_values, "fcf_yield", None)
-        if pe_ratio is not None and pe_ratio > 0:
-            scores.append(self._normalize(pe_ratio, 5, 40, invert=True))
-        # P/S: 0.5-10 → 100-0
-        if ps_ratio is not None and ps_ratio > 0:
-            scores.append(self._normalize(ps_ratio, 0.5, 10, invert=True))
-        # P/B: 0.5-5 → 100-0
-        if pb_ratio is not None and pb_ratio > 0:
-            scores.append(self._normalize(pb_ratio, 0.5, 5, invert=True))
-        # FCF yield: 0-10% → 0-100 (higher is better)
-        if fcf_yield is not None:
-            scores.append(min(100, fcf_yield * 10))
 
-        if scores:
-            return sum(scores) / len(scores)
+        components, average = self._valuation_component_scores(
+            pe_ratio,
+            ps_ratio,
+            pb_ratio,
+            fcf_yield,
+        )
+
+        # Component breakdown for the band-saturation diagnostic
+        # (observability only — calculate_score reads this after scoring).
+        self._last_valuation_components = components
+
+        if average is not None:
+            return average
 
         # The FinancialMetric table / statement engine returned no usable
         # valuation ratios; fall back to the canonical snapshot.
         return self._score_valuation_snapshot(fundamental_snapshot)
+
+    @staticmethod
+    def _valuation_component_scores(
+        pe_ratio: float | None,
+        ps_ratio: float | None,
+        pb_ratio: float | None,
+        fcf_yield: float | None,
+    ) -> tuple[dict[str, float], float | None]:
+        """
+        Compute the per-ratio valuation components and their equal-weighted
+        average.
+
+        Bands (lower is better except FCF yield):
+            P/E 5-40 → 100-0, P/S 0.5-10 → 100-0, P/B 0.5-5 → 100-0,
+            FCF yield contributes fcf_yield * 10 clamped to [0, 100].
+
+        The FCF clamp is a correctness fix, not a calibration change: a
+        negative FCF yield previously produced a negative component and
+        could push the valuation average below the scorer's own 0-100
+        component invariant (business Rule 2 in _validate_business_rules).
+        """
+        components: dict[str, float] = {}
+
+        if pe_ratio is not None and pe_ratio > 0:
+            components["pe"] = InvestmentScoringEngine._normalize(
+                pe_ratio, 5, 40, invert=True
+            )
+
+        if ps_ratio is not None and ps_ratio > 0:
+            components["ps"] = InvestmentScoringEngine._normalize(
+                ps_ratio, 0.5, 10, invert=True
+            )
+
+        if pb_ratio is not None and pb_ratio > 0:
+            components["pb"] = InvestmentScoringEngine._normalize(
+                pb_ratio, 0.5, 5, invert=True
+            )
+
+        if fcf_yield is not None:
+            components["fcf_yield"] = max(0.0, min(100.0, fcf_yield * 10))
+
+        average = (
+            sum(components.values()) / len(components)
+            if components
+            else None
+        )
+
+        return components, average
+
+    @staticmethod
+    def _valuation_saturation_issue(
+        components: dict[str, float] | None,
+    ) -> str | None:
+        """
+        Return the band-saturation diagnostic for a valuation component
+        breakdown, or None when it is not boundary-dominated.
+
+        Observability only — the score is intentionally unchanged. The
+        fixed absolute bands clamp at their edges, so two or more
+        components pegged at 0/100 mean the valuation score says more
+        about band fit than about the company (P/E 40 and P/E 400 both
+        score exactly 0). Band recalibration is a separate product
+        decision.
+        """
+        if not components:
+            return None
+
+        order = ("pe", "ps", "pb", "fcf_yield")
+
+        saturated = [
+            name
+            for name in order
+            if name in components
+            and (
+                components[name] <= 0.0
+                or components[name] >= 100.0
+            )
+        ]
+
+        if len(saturated) < 2:
+            return None
+
+        breakdown = ", ".join(
+            f"{name}: {components[name]:.0f}"
+            for name in saturated
+        )
+
+        return (
+            "valuation_components_saturated: "
+            f"{breakdown} ({len(saturated)} of {len(components)} "
+            "components pegged at a band boundary; fixed absolute "
+            "valuation bands saturate for this company, score unchanged)"
+        )
 
     @staticmethod
     def _score_valuation_snapshot(
@@ -801,6 +903,18 @@ class InvestmentScoringEngine:
         validation_issues = self._validate_business_rules(
             scores, overall, recommendation, confidence, data_quality_result
         )
+
+        # Observability: the fixed absolute valuation bands saturate at
+        # their edges for growth-priced companies. Record when the
+        # component breakdown is boundary-dominated; the valuation score
+        # itself is intentionally unchanged (band recalibration is a
+        # separate product decision).
+        saturation_issue = self._valuation_saturation_issue(
+            self._last_valuation_components
+        )
+
+        if saturation_issue:
+            validation_issues.append(saturation_issue)
 
         score = InvestmentScore(
             company_id=company_id,

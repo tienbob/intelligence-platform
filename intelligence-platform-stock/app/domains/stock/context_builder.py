@@ -48,6 +48,113 @@ def _by_kind(
     return [observation for observation in observations if observation.kind in allowed]
 
 
+# Providers are ranked so canonical row-shaped statement data wins
+# deterministically regardless of observation insertion order. FMP is the
+# canonical normalized provider; SEC XBRL concept-shaped rows are the
+# fallback alignment path.
+_STATEMENT_PROVIDER_PRIORITY: dict[str, int] = {
+    "fmp": 0,
+    "sec": 1,
+    "massive": 2,
+    "finnhub": 3,
+    "unknown": 99,
+}
+
+
+def _provider_priority(source: Any) -> int:
+    """Rank a provider for deterministic statement-source selection."""
+    name = str(source or "").strip().lower()
+    return _STATEMENT_PROVIDER_PRIORITY.get(
+        name,
+        _STATEMENT_PROVIDER_PRIORITY["unknown"],
+    )
+
+
+def _pick_row_shaped_observation(
+    observations: list[Observation],
+    row_keys: tuple[str, ...],
+) -> Observation | None:
+    """Return the highest-priority observation with row-shaped statement data.
+
+    Row-shaped rows expose canonical statement keys directly on the row
+    (``{"total_assets": ..., "total_debt": ...}``, as normalized by FMP).
+    Concept-shaped rows (SEC XBRL: ``{"concept": ..., "value": ...}``) are
+    deliberately NOT candidates here, so two different debt definitions —
+    FMP's combined ``totalDebt`` and SEC's ``LongTermDebt`` XBRL concept —
+    can never race on observation insertion order for the same canonical
+    field. Selection is a pure function of (row presence, provider rank),
+    which keeps the snapshot byte-for-byte stable for a closed period even
+    when provider availability changes between runs.
+    """
+    best: Observation | None = None
+    best_rank = (1, _STATEMENT_PROVIDER_PRIORITY["unknown"], 0)
+
+    for obs in observations:
+        data = obs.data
+
+        if not isinstance(data, list):
+            continue
+
+        rows = [row for row in data if isinstance(row, dict)]
+
+        if not rows:
+            continue
+
+        if not any(key in rows[0] for key in row_keys):
+            continue
+
+        rank = (0, _provider_priority(getattr(obs, "source", None)), 0)
+
+        if rank < best_rank:
+            best_rank = rank
+            best = obs
+
+    return best
+
+
+def _collect_concept_rows(
+    observations: list[Observation],
+) -> list[dict[str, Any]]:
+    """Flatten concept-shaped statement rows across all observations.
+
+    SEC XBRL rows carry ``concept`` / ``value`` / ``fiscal_year`` /
+    ``fp`` / ``form`` / ``filed`` metadata. Merging across observations and
+    letting ``_aligned_concept_values`` pick the latest coherent filing
+    period keeps the fallback path deterministic too.
+    """
+    rows: list[dict[str, Any]] = []
+
+    for obs in observations:
+        data = obs.data
+
+        if not isinstance(data, list):
+            continue
+
+        for row in data:
+            if isinstance(row, dict) and row.get("concept") is not None:
+                rows.append(row)
+
+    return rows
+
+
+def _concept_row_preferred(
+    candidate: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    """Return True when ``candidate`` should replace ``current``.
+
+    Deterministic tie-breaking: prefer the USD unit, then the most recently
+    filed fact. Never depends on provider/insertion order.
+    """
+    candidate_usd = candidate.get("unit") == "USD"
+    current_usd = current.get("unit") == "USD"
+
+    if candidate_usd != current_usd:
+        return candidate_usd
+
+    return str(candidate.get("filed") or "") > str(current.get("filed") or "")
+
+
 def _first_not_none(*values: Any) -> Any:
     """Return the first value that is not None.
 
@@ -224,10 +331,93 @@ def _same_reporting_period(
     return False
 
 
+# ---------------------------------------------------------------------------
+# XBRL duration selection
+# ---------------------------------------------------------------------------
+#
+# SEC companyfacts store DURATION facts (income / cash flow: a value over a
+# start→end window) and INSTANT facts (balance sheet: a value at a date).
+# A quarterly 10-Q legitimately contains BOTH the ~3-month quarterly fact
+# AND the ~6-month year-to-date fact for the same concept — same fiscal
+# year, same fp, same form, same ``filed`` date. Grouping by
+# (fiscal_year, fp, form) therefore cannot tell them apart, and "latest
+# filed" could surface the YTD figure as the quarter's revenue (observed as
+# a ~48% inflation: Q2 + Q1 reported as Q2).
+#
+# For duration-bearing concepts the snapshot expects, the selector prefers
+# the shortest duration inside the band implied by the filing
+# (10-Q / fp=Qx → ~3 months; 10-K / fp=FY → ~12 months) and only falls back
+# to the existing USD-then-latest-filed preference when no fact inside the
+# band exists. Instant facts carry no ``start`` and are unaffected.
+
+_QUARTERLY_DURATION_DAYS = (60, 120)
+_ANNUAL_DURATION_DAYS = (300, 400)
+
+
+def _fact_duration_days(row: dict[str, Any]) -> int | None:
+    """Return the length of an XBRL fact's reporting window in days.
+
+    Duration facts carry both ``start`` and ``end``; instant facts
+    (balance sheet) carry only ``end`` and therefore return ``None``.
+    """
+    start = _parse_date(row.get("start"))
+    end = _parse_date(row.get("end"))
+
+    if start is None or end is None or end < start:
+        return None
+
+    return (end - start).days
+
+
+def _expected_duration_band(
+    rows: list[dict[str, Any]],
+) -> tuple[int, int] | None:
+    """Infer the duration band the snapshot expects from filing metadata.
+
+    Quarterly filings (10-Q, fp=Q1..Q4) report ~3-month windows; annual
+    filings (10-K, fp=FY) report ~12-month windows. Returns ``None`` when
+    the group's shape is unknown, in which case selection keeps the legacy
+    USD-then-latest-filed behavior.
+    """
+    forms = {
+        str(row.get("form") or "").upper()
+        for row in rows
+        if isinstance(row, dict)
+    }
+    periods = {
+        str(row.get("period") or row.get("fp") or "").upper()
+        for row in rows
+        if isinstance(row, dict)
+    }
+
+    if any(form.startswith("10-Q") for form in forms) or any(
+        re.fullmatch(r"Q[1-4]", period) for period in periods if period
+    ):
+        return _QUARTERLY_DURATION_DAYS
+
+    if any(form.startswith("10-K") for form in forms) or any(
+        period.startswith("FY") for period in periods if period
+    ):
+        return _ANNUAL_DURATION_DAYS
+
+    return None
+
+
 def _aligned_concept_values(
     rows: list[dict[str, Any]],
+    *,
+    duration_aware: bool = False,
 ) -> dict[str, Any]:
-    """Select concept facts from the latest coherent filing period."""
+    """Select concept facts from the latest coherent filing period.
+
+    When ``duration_aware`` is set (duration-bearing statements: income,
+    cash flow), a concept carrying multiple reporting windows inside the
+    same filing group resolves to the shortest duration inside the band
+    implied by the filing — a quarterly 10-Q therefore selects the 3-month
+    revenue fact over the 6-month year-to-date fact. Balance-sheet
+    (instant) facts are not passed through this path and legacy rows
+    without ``start``/``end`` keep the original behavior.
+    """
     groups: dict[tuple[Any, Any, Any], list[dict[str, Any]]] = {}
 
     for row in rows:
@@ -246,10 +436,82 @@ def _aligned_concept_values(
 
     selected = max(groups.values(), key=_latest_filed)
 
+    band = (
+        _expected_duration_band(selected)
+        if duration_aware
+        else None
+    )
+
+    # One value per concept. Duplicate concepts (multiple units / amended
+    # facts for the same period) resolve deterministically: USD unit over
+    # any other unit, then the most recently filed fact. When duration
+    # metadata is available, candidates are first narrowed to the shortest
+    # reporting window inside the expected band so a YTD fact can never
+    # stand in for the quarterly one.
+    rows_by_concept: dict[str, list[dict[str, Any]]] = {}
+
+    for row in selected:
+        concept = row.get("concept")
+
+        if not concept or row.get("value") is None:
+            continue
+
+        rows_by_concept.setdefault(concept, []).append(row)
+
+    best_by_concept: dict[str, dict[str, Any]] = {}
+
+    for concept, candidates in rows_by_concept.items():
+        if band is not None:
+            banded = [
+                (row, _fact_duration_days(row))
+                for row in candidates
+            ]
+            banded = [
+                (row, duration)
+                for row, duration in banded
+                if duration is not None
+                and band[0] <= duration <= band[1]
+            ]
+
+            if banded:
+                # The target fiscal-period end is the latest window end in
+                # the group. A window ending earlier belongs to a prior
+                # period even when it shares the group's fy/fp/form
+                # metadata, so it must never win — this is what makes
+                # "selected duration ends at the fiscal-period end" hold
+                # for stale or mislabeled filing data too.
+                target_end = max(
+                    _parse_date(row.get("end"))
+                    for row, _ in banded
+                )
+
+                banded = [
+                    (row, duration)
+                    for row, duration in banded
+                    if _parse_date(row.get("end")) == target_end
+                ]
+
+                shortest = min(
+                    duration for _, duration in banded
+                )
+
+                candidates = [
+                    row
+                    for row, duration in banded
+                    if duration == shortest
+                ]
+
+        best = candidates[0]
+
+        for candidate in candidates[1:]:
+            if _concept_row_preferred(candidate, best):
+                best = candidate
+
+        best_by_concept[concept] = best
+
     result = {
-        row.get("concept"): row.get("value")
-        for row in selected
-        if row.get("concept") and row.get("value") is not None
+        concept: best["value"]
+        for concept, best in best_by_concept.items()
     }
 
     if selected:
@@ -1022,9 +1284,19 @@ class StockContextBuilder:
         # ---------------------------------------------------------------
         # Income statement
         # ---------------------------------------------------------------
-        if financials and isinstance(financials[0].data, list):
+        # Row-shaped provider data (FMP) is preferred deterministically over
+        # concept-shaped XBRL rows (SEC). Whichever source is selected, the
+        # same canonical keys are emitted — the snapshot stays byte-for-byte
+        # stable for a closed period even when provider availability
+        # (and therefore observation ordering) changes between runs.
+        income_obs = _pick_row_shaped_observation(
+            financials,
+            ("revenue", "net_income", "gross_profit", "operating_income", "eps"),
+        )
+
+        if income_obs is not None:
             rows = [
-                row for row in financials[0].data
+                row for row in income_obs.data
                 if isinstance(row, dict)
             ]
 
@@ -1034,8 +1306,18 @@ class StockContextBuilder:
                     rows,
                     latest_income,
                 )
-            elif rows:
-                latest_income = _aligned_concept_values(rows)
+        else:
+            concept_rows = _collect_concept_rows(financials)
+
+            if concept_rows:
+                # Income concepts are duration facts: a quarterly 10-Q
+                # group holds both the 3-month quarter window and the
+                # 6-month year-to-date window, so selection must be
+                # duration-aware or YTD revenue can pose as the quarter.
+                latest_income = _aligned_concept_values(
+                    concept_rows,
+                    duration_aware=True,
+                )
 
         if latest_income:
             revenue = latest_income.get("revenue")
@@ -1103,60 +1385,90 @@ class StockContextBuilder:
         # Balance sheet
         # ---------------------------------------------------------------
         balance_section: dict[str, Any] = {
-            "source": balances[0].source if balances else None,
+            "source": None,
             "period": None,
             "mode": "unavailable",
         }
 
-        if balances and isinstance(balances[0].data, list):
+        # Row-shaped (FMP) balance data always wins over concept-shaped (SEC)
+        # XBRL data, regardless of observation ordering. This is the core
+        # total_debt stability fix: FMP's combined ``totalDebt`` and SEC's
+        # ``LongTermDebt`` XBRL concept are different line-item definitions
+        # (~2% apart for Apple), and whichever observation happened to be
+        # ``balances[0]`` previously decided which one entered the snapshot.
+        balance_obs = _pick_row_shaped_observation(
+            balances,
+            ("total_assets", "total_liabilities", "total_debt", "cash", "shareholders_equity"),
+        )
+
+        if balance_obs is not None:
             rows = [
-                row for row in balances[0].data
+                row for row in balance_obs.data
                 if isinstance(row, dict)
             ]
+            balance_section["source"] = balance_obs.source
 
-            if rows and "total_assets" in rows[0]:
-                b = _select_period_row(rows, target_period) if target_period else rows[0]
+            b = _select_period_row(rows, target_period) if target_period else rows[0]
 
-                if b:
-                    balance_section["period"] = (
-                        b.get("period")
-                        or b.get("fp")
-                        or b.get("fiscal_year")
-                    )
-                    balance_section["mode"] = "period_row"
-                    snap.update(
-                        {
-                            "total_assets": b.get("total_assets"),
-                            "total_debt": b.get("total_debt"),
-                            "shareholders_equity": b.get("shareholders_equity"),
-                            "cash": b.get("cash"),
-                        }
-                    )
-                else:
-                    # A target period existed but no balance-sheet row
-                    # matched it. Values are deliberately NOT merged from a
-                    # different period; the provenance block records why.
-                    balance_section["mode"] = "no_period_match"
+            if b:
+                balance_section["period"] = (
+                    b.get("period")
+                    or b.get("fp")
+                    or b.get("fiscal_year")
+                )
+                balance_section["mode"] = "period_row"
+                snap.update(
+                    {
+                        "total_assets": b.get("total_assets"),
+                        "total_debt": b.get("total_debt"),
+                        "shareholders_equity": b.get("shareholders_equity"),
+                        "cash": b.get("cash"),
+                    }
+                )
+            else:
+                # A target period existed but no balance-sheet row
+                # matched it. Values are deliberately NOT merged from a
+                # different period; the provenance block records why.
+                balance_section["mode"] = "no_period_match"
+        else:
+            # Concept-shaped provider rows (SEC XBRL) are the fallback when
+            # no provider supplied row-shaped balance data. All concept rows
+            # are merged so the same canonical line items are emitted
+            # regardless of which provider observation arrives first.
+            concept_rows = _collect_concept_rows(balances)
 
-            elif rows:
-                aligned = _aligned_concept_values(rows)
+            if concept_rows:
+                aligned = _aligned_concept_values(concept_rows)
                 balance_section["mode"] = "concept_alignment"
+                balance_section["source"] = (
+                    next((obs.source for obs in balances if obs.source), None)
+                )
+                balance_section["period"] = _first_not_none(
+                    aligned.get("period"),
+                    aligned.get("fiscal_year"),
+                )
                 snap.update(aligned)
 
         # ---------------------------------------------------------------
         # Cash flow
         # ---------------------------------------------------------------
         cashflow_section: dict[str, Any] = {
-            "source": cashflows[0].source if cashflows else None,
+            "source": None,
             "period": None,
             "mode": "unavailable",
         }
 
-        if cashflows and isinstance(cashflows[0].data, list):
+        cashflow_obs = _pick_row_shaped_observation(
+            cashflows,
+            ("operating_cash_flow", "free_cash_flow", "capital_expenditure"),
+        )
+
+        if cashflow_obs is not None:
             rows = [
-                row for row in cashflows[0].data
+                row for row in cashflow_obs.data
                 if isinstance(row, dict)
             ]
+            cashflow_section["source"] = cashflow_obs.source
 
             if rows:
                 has_period_metadata = any(
@@ -1197,21 +1509,58 @@ class StockContextBuilder:
                     # it. Values are deliberately NOT merged from a
                     # different period; provenance records why.
                     cashflow_section["mode"] = "no_period_match"
+        else:
+            concept_rows = _collect_concept_rows(cashflows)
+
+            if concept_rows:
+                # Cash-flow concepts are duration facts too (quarterly vs
+                # year-to-date operating cash flow share one filing group).
+                aligned = _aligned_concept_values(
+                    concept_rows,
+                    duration_aware=True,
+                )
+                cashflow_section["mode"] = "concept_alignment"
+                cashflow_section["source"] = (
+                    next((obs.source for obs in cashflows if obs.source), None)
+                )
+                cashflow_section["period"] = _first_not_none(
+                    aligned.get("period"),
+                    aligned.get("fiscal_year"),
+                )
+                snap.update(
+                    {
+                        "operating_cash_flow": aligned.get("operating_cash_flow"),
+                        "free_cash_flow": aligned.get("free_cash_flow"),
+                        "capital_expenditure": aligned.get("capital_expenditure"),
+                    }
+                )
 
         # ---------------------------------------------------------------
         # Ratios
         # ---------------------------------------------------------------
         ratios_section: dict[str, Any] = {
-            "source": ratios[0].source if ratios else None,
+            "source": None,
             "period": None,
             "mode": "unavailable",
         }
 
-        if ratios and isinstance(ratios[0].data, list):
+        ratios_obs = _pick_row_shaped_observation(
+            ratios,
+            (
+                "priceEarningsRatio",
+                "returnOnEquity",
+                "debtEquityRatio",
+                "priceToSalesRatio",
+                "priceToBookRatio",
+            ),
+        )
+
+        if ratios_obs is not None:
             rows = [
-                row for row in ratios[0].data
+                row for row in ratios_obs.data
                 if isinstance(row, dict)
             ]
+            ratios_section["source"] = ratios_obs.source
 
             if rows:
                 has_period_metadata = any(
@@ -1287,7 +1636,15 @@ class StockContextBuilder:
         snap["latest_statement"] = {
             "period": latest_period,
             "fiscal_year": latest_fiscal_year,
-            "source": financials[0].source if financials else None,
+            "source": (
+                income_obs.source
+                if income_obs is not None
+                else (
+                    financials[0].source
+                    if financials
+                    else None
+                )
+            ),
             "period_type": latest_income.get("period_type")
             if latest_income
             else None,
@@ -1295,14 +1652,23 @@ class StockContextBuilder:
 
         # Per-section provenance: which provider supplied each statement
         # section, which period row was actually selected, and whether
-        # alignment succeeded. Financial fields for the SAME quarter were
-        # observed to drift between runs (e.g. total_debt) or disappear
-        # (cash-flow fields, revenue_growth_yoy) when a provider returned
-        # different period coverage; this makes such divergence
-        # attributable instead of silent.
+        # alignment succeeded. Row-shaped (FMP) data is now preferred
+        # deterministically over concept-shaped (SEC) data, so fields for
+        # the SAME quarter (e.g. total_debt, free_cash_flow) no longer flip
+        # between provider line-item definitions between runs; when a
+        # provider is missing entirely, the fallback mode below records it
+        # so any remaining divergence stays attributable instead of silent.
         snap["provenance"] = {
             "income_statement": {
-                "source": financials[0].source if financials else None,
+                "source": (
+                    income_obs.source
+                    if income_obs is not None
+                    else (
+                        financials[0].source
+                        if financials
+                        else None
+                    )
+                ),
                 "period": latest_period,
                 "fiscal_year": latest_fiscal_year,
                 "period_type": (

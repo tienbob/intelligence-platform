@@ -764,6 +764,25 @@ class IntelligencePipeline:
     # RAG
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _has_retrievable_evidence(result: Any) -> bool:
+        """
+        Return True when at least one RAG bucket contains documents.
+
+        An adapter can succeed structurally yet return every bucket empty
+        — that outcome produced zero usable evidence and must be treated
+        as degraded, not as success. An empty bucket dict is truthy, which
+        previously let a zero-evidence run report
+        ``stages["rag"] == "success"`` and keep full confidence.
+        """
+        if not isinstance(result, dict):
+            return False
+
+        return any(
+            bool(bucket)
+            for bucket in result.values()
+        )
+
     async def _retrieve_context(
         self,
         domain: DomainModule,
@@ -789,14 +808,21 @@ class IntelligencePipeline:
                 entity_id=request.entity_ref.entity_id,
             )
 
-            if not result:
+            rag_context = result if isinstance(result, dict) else {}
+
+            # Structurally successful retrieval with every bucket empty
+            # produced zero usable evidence: surface it as degraded so
+            # RAG_DEGRADED_CONFIDENCE_CAP applies. The bucket dict is still
+            # returned so stage details, the news-gap diagnostic, and
+            # retrieval stats keep their shape.
+            if not self._has_retrievable_evidence(rag_context):
                 return (
-                    {},
+                    rag_context,
                     "degraded",
-                    ["RAG returned no context"],
+                    ["RAG returned no usable context"],
                 )
 
-            return result, "success", []
+            return rag_context, "success", []
 
         except Exception as exc:
             logger.warning(
