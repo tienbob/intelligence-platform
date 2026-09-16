@@ -196,6 +196,18 @@ class MassiveProvider(MarketDataProvider, NewsProvider, FundamentalDataProvider)
 
     # ── FundamentalDataProvider ──────────────────────────────────
 
+    async def get_ticker_details(self, ticker: str) -> dict[str, Any]:
+        """Get ticker/company details (name, exchange, market cap).
+
+        Endpoint: GET /v3/reference/tickers/{ticker}
+        """
+        data = await self._request(
+            "GET",
+            f"/v3/reference/tickers/{ticker.upper()}",
+            params=self._build_params(),
+        )
+        return data.get("results", data) if isinstance(data, dict) else {}
+
     async def get_income_statement(self, ticker: str) -> list[dict[str, Any]]:
         """
         Get income statement data.

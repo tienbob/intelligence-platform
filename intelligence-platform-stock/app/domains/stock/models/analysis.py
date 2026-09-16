@@ -177,7 +177,12 @@ class Embedding(Base, TimestampMixin):
 
 
 class Analysis(Base, TimestampMixin):
-    """Full AI analysis record (Section 15, 31)."""
+    """Full AI analysis record (Section 15, 31).
+
+    Ownership: ``user_id`` mirrors Rails ``users.id`` (no FK — users table is
+    Rails-owned). ``NULL`` = system/scheduler row, visible to everyone.
+    Market-data tables stay global; only this user-action table is scoped.
+    """
 
     __tablename__ = "analyses"
 
@@ -186,6 +191,7 @@ class Analysis(Base, TimestampMixin):
     company_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("companies.id"), nullable=False, index=True
     )
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     analysis_type: Mapped[str] = mapped_column(String(50), nullable=False)
     analysis_version: Mapped[str] = mapped_column(String(20), default="1.0")
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|completed|failed

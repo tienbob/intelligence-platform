@@ -5,13 +5,13 @@ News API endpoints.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.news import CompanyNews, News
-from app.domains.stock.schemas.news import NewsListResponse, NewsResponse
+from app.domains.stock.schemas.news import NewsListItem, NewsListResponse, NewsResponse
 
 router = APIRouter(prefix="/news", tags=["news"])
 
@@ -23,9 +23,8 @@ async def list_news(
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List news, optionally filtered by ticker."""
+    """List news (lean rows: what the FE feed renders)."""
     query = select(News)
-    count_query = select(func.count(News.id))
 
     if ticker:
         company_result = await db.execute(
@@ -39,21 +38,13 @@ async def list_news(
             .join(CompanyNews, CompanyNews.news_id == News.id)
             .where(CompanyNews.company_id == company.id)
         )
-        count_query = (
-            select(func.count(News.id))
-            .join(CompanyNews, CompanyNews.news_id == News.id)
-            .where(CompanyNews.company_id == company.id)
-        )
 
     query = query.order_by(desc(News.published_at)).offset(offset).limit(limit)
     result = await db.execute(query)
     news_items = result.scalars().all()
 
-    total = (await db.execute(count_query)).scalar() or 0
-
     return NewsListResponse(
-        news=[NewsResponse.model_validate(n) for n in news_items],
-        total=total,
+        news=[NewsListItem.model_validate(n) for n in news_items],
     )
 
 

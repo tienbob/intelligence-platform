@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import RequireAuth from './components/RequireAuth';
 import Landing from './pages/Landing';
@@ -12,7 +12,7 @@ import EventDetail from './pages/EventDetail';
 import Market from './pages/Market';
 import Analysis from './pages/Analysis';
 import AnalysisDetail from './pages/AnalysisDetail';
-import Portfolio from './pages/Portfolio';
+import Opportunities from './pages/Opportunities';
 import Backtest from './pages/Backtest';
 import Alerts from './pages/Alerts';
 import Search from './pages/Search';
@@ -49,7 +49,8 @@ export default function App() {
       <Route path="/market" element={<Protected><Market /></Protected>} />
       <Route path="/analysis" element={<Protected><Analysis /></Protected>} />
       <Route path="/analysis/:analysisId" element={<Protected><AnalysisDetail /></Protected>} />
-      <Route path="/portfolio" element={<Protected><Portfolio /></Protected>} />
+      <Route path="/opportunities" element={<Protected><Opportunities /></Protected>} />
+      <Route path="/portfolio" element={<Navigate to="/opportunities" replace />} />
       <Route path="/backtest" element={<Protected><Backtest /></Protected>} />
       <Route path="/alerts" element={<Protected><Alerts /></Protected>} />
       <Route path="/search" element={<Protected><Search /></Protected>} />

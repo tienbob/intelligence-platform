@@ -24,9 +24,10 @@ async def get_prices(
     start_date: datetime = Query(default=None),
     end_date: datetime = Query(default=None),
     interval: str = Query(default="1d"),
+    limit: int = Query(default=365, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get historical prices for a ticker."""
+    """Get historical prices for a ticker (lean points: what the FE renders)."""
     result = await db.execute(
         select(Company).where(Company.ticker == ticker.upper())
     )
@@ -45,9 +46,10 @@ async def get_prices(
         .where(StockPrice.interval == interval)
         .where(StockPrice.timestamp >= start_date)
         .where(StockPrice.timestamp <= end_date)
-        .order_by(StockPrice.timestamp)
+        .order_by(desc(StockPrice.timestamp))
+        .limit(limit)
     )
-    prices = price_result.scalars().all()
+    prices = list(reversed(price_result.scalars().all()))
 
     return StockPriceHistory(
         ticker=ticker.upper(),

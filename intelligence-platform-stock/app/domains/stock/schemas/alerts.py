@@ -20,16 +20,16 @@ class AlertCreateRequest(BaseModel):
 
 
 class AlertResponse(BaseModel):
+    """Lean alert — only fields rendered by the FE feed."""
+
     id: int
     ticker: Optional[str] = None
     alert_type: str
     severity: str = "medium"
     message: str
-    data: Optional[dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 
 
 class AlertListResponse(BaseModel):
     alerts: list[AlertResponse]
-    total: int

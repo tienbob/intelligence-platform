@@ -217,6 +217,12 @@ async def verify_api_key(api_key: Optional[str] = Security(api_key_header)) -> s
 #
 # Rails forwards the acting user's identity via `X-User-Id`/`X-User-Role`
 # headers so Python can scope requests per user without trusting user JWTs.
+#
+# Ownership model (global market data + user-bound actions):
+#   - GLOBAL (no scoping): companies, prices, financials, news, events,
+#     market, investment_scores, backtest_snapshots, alerts.
+#   - USER-BOUND: analyses + backtest_runs (+ their child rows via join).
+#     ``user_id=NULL`` = system/scheduler legacy row → visible to everyone.
 async def verify_internal_service_key(
     api_key: Optional[str] = Security(api_key_header),
     x_service_key: Optional[str] = Security(APIKeyHeader(name="X-Service-Key", auto_error=False)),
@@ -240,6 +246,58 @@ async def verify_internal_service_key(
         )
 
     return {}
+
+
+def get_actor(request: Any) -> dict[str, Any]:
+    """Extract the acting user forwarded by Rails (`X-User-Id`/`X-User-Role`).
+
+    Returns ``{"user_id": int | None, "role": str}``. ``user_id=None`` means
+    anonymous/system context (dev mode or scheduler) — sees system rows only
+    via the NULL-inclusive visibility rule.
+    """
+    user_id: int | None = None
+    try:
+        raw = request.headers.get("X-User-Id") if request is not None else None
+        if raw not in (None, "", "None", "null"):
+            user_id = int(str(raw).strip())
+    except (ValueError, TypeError, AttributeError):
+        user_id = None
+    try:
+        role = request.headers.get("X-User-Role") if request is not None else None
+    except AttributeError:
+        role = None
+    return {"user_id": user_id, "role": (role or "SYSTEM").upper()}
+
+
+def is_admin_actor(actor: dict[str, Any] | None) -> bool:
+    """ADMIN/SYSTEM roles bypass ownership (support + ops visibility)."""
+    return bool(actor) and str(actor.get("role", "")).upper() in {"ADMIN", "SYSTEM"}
+
+
+def visible_to_actor(column: Any, actor: dict[str, Any] | None) -> Any:
+    """SQLAlchemy filter: own rows + system (NULL) rows.
+
+    Admin/SYSTEM (incl. anonymous dev context) see everything; regular users
+    see ``column == user_id OR column IS NULL``.
+    """
+    if actor is None or is_admin_actor(actor):
+        return True
+    uid = actor.get("user_id")
+    if uid is None:
+        # No identity and not admin (shouldn't happen — Rails always
+        # forwards; defensive): only system rows, never another user's.
+        return column.is_(None)
+    return (column == uid) | (column.is_(None))
+
+
+def owns_row(row_user_id: int | None, actor: dict[str, Any] | None) -> bool:
+    """Row-level ownership check for single-row GET/DELETE."""
+    if actor is None or is_admin_actor(actor):
+        return True
+    uid = actor.get("user_id")
+    if row_user_id is None:
+        return True  # system row — visible to everyone
+    return uid is not None and row_user_id == uid
 
 
 def generate_api_key() -> str:

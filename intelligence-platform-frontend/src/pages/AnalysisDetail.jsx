@@ -158,7 +158,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-primary">summarize</span>
                 Summary
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.summary}</p>
+              <p className="text-sm text-on-surface leading-relaxed line-clamp-4">{analysis.summary}</p>
             </div>
           )}
 
@@ -168,7 +168,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-tertiary">lightbulb</span>
                 Investment Thesis
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.investment_thesis}</p>
+              <p className="text-sm text-on-surface leading-relaxed line-clamp-4">{analysis.investment_thesis}</p>
             </div>
           )}
 
@@ -178,7 +178,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-secondary">public</span>
                 Market Interpretation
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.market_interpretation}</p>
+              <p className="text-sm text-on-surface leading-relaxed line-clamp-4">{analysis.market_interpretation}</p>
             </div>
           )}
 
@@ -191,13 +191,16 @@ export default function AnalysisDetail() {
                   Bull Case
                 </h3>
                 <ul className="space-y-2">
-                  {analysis.bull_case.map((point, i) => (
+                  {analysis.bull_case.slice(0, 4).map((point, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-tertiary text-base mt-0.5">check_circle</span>
-                      {point}
+                      <span className="line-clamp-2">{point}</span>
                     </li>
                   ))}
                 </ul>
+                {analysis.bull_case.length > 4 && (
+                  <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.bull_case.length - 4} more</p>
+                )}
               </div>
             )}
             {analysis.bear_case?.length > 0 && (
@@ -207,13 +210,16 @@ export default function AnalysisDetail() {
                   Bear Case
                 </h3>
                 <ul className="space-y-2">
-                  {analysis.bear_case.map((point, i) => (
+                  {analysis.bear_case.slice(0, 4).map((point, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-error text-base mt-0.5">cancel</span>
-                      {point}
+                      <span className="line-clamp-2">{point}</span>
                     </li>
                   ))}
                 </ul>
+                {analysis.bear_case.length > 4 && (
+                  <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.bear_case.length - 4} more</p>
+                )}
               </div>
             )}
           </div>
@@ -227,13 +233,16 @@ export default function AnalysisDetail() {
                   Catalysts
                 </h3>
                 <ul className="space-y-2">
-                  {analysis.catalysts.map((item, i) => (
+                  {analysis.catalysts.slice(0, 4).map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-tertiary text-base mt-0.5">bolt</span>
-                      {item}
+                      <span className="line-clamp-2">{item}</span>
                     </li>
                   ))}
                 </ul>
+                {analysis.catalysts.length > 4 && (
+                  <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.catalysts.length - 4} more</p>
+                )}
               </div>
             )}
             {analysis.risks?.length > 0 && (
@@ -243,13 +252,16 @@ export default function AnalysisDetail() {
                   Risks
                 </h3>
                 <ul className="space-y-2">
-                  {analysis.risks.map((item, i) => (
+                  {analysis.risks.slice(0, 4).map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-error text-base mt-0.5">warning</span>
-                      {item}
+                      <span className="line-clamp-2">{item}</span>
                     </li>
                   ))}
                 </ul>
+                {analysis.risks.length > 4 && (
+                  <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.risks.length - 4} more</p>
+                )}
               </div>
             )}
           </div>
@@ -262,10 +274,10 @@ export default function AnalysisDetail() {
                 Causes
               </h3>
               <div className="space-y-3">
-                {analysis.causes.map((cause, i) => (
+                {analysis.causes.slice(0, 3).map((cause, i) => (
                   <div key={i} className="p-3 bg-surface-variant rounded border border-outline-variant">
                     <div className="flex justify-between items-start gap-2">
-                      <p className="text-sm text-on-surface font-medium">{cause.cause}</p>
+                      <p className="text-sm text-on-surface font-medium line-clamp-2">{cause.cause}</p>
                       <StatusChip status={cause.impact === 'high' ? 'bearish' : cause.impact === 'low' ? 'bullish' : 'neutral'} label={cause.impact} />
                     </div>
                     {cause.confidence != null && (
@@ -276,6 +288,9 @@ export default function AnalysisDetail() {
                   </div>
                 ))}
               </div>
+              {analysis.causes.length > 3 && (
+                <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.causes.length - 3} more</p>
+              )}
             </div>
           )}
         </div>
@@ -296,26 +311,32 @@ export default function AnalysisDetail() {
                 <div className="mb-4">
                   <div className="text-xs text-on-surface-variant mb-2 data-font uppercase tracking-wider">Reasons</div>
                   <ul className="space-y-1.5">
-                    {recommendation.reasons.map((r, i) => (
+                    {recommendation.reasons.slice(0, 3).map((r, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs text-on-surface">
                         <span className="material-symbols-outlined text-tertiary text-sm mt-0.5">chevron_right</span>
-                        {r}
+                        <span className="line-clamp-1">{r}</span>
                       </li>
                     ))}
                   </ul>
+                  {recommendation.reasons.length > 3 && (
+                    <p className="text-xs text-on-surface-variant mt-1 italic">+{recommendation.reasons.length - 3} more</p>
+                  )}
                 </div>
               )}
               {recommendation.risks?.length > 0 && (
                 <div>
                   <div className="text-xs text-on-surface-variant mb-2 data-font uppercase tracking-wider">Risks</div>
                   <ul className="space-y-1.5">
-                    {recommendation.risks.map((r, i) => (
+                    {recommendation.risks.slice(0, 3).map((r, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs text-on-surface">
                         <span className="material-symbols-outlined text-error text-sm mt-0.5">warning</span>
-                        {r}
+                        <span className="line-clamp-1">{r}</span>
                       </li>
                     ))}
                   </ul>
+                  {recommendation.risks.length > 3 && (
+                    <p className="text-xs text-on-surface-variant mt-1 italic">+{recommendation.risks.length - 3} more</p>
+                  )}
                 </div>
               )}
             </div>
@@ -362,9 +383,9 @@ export default function AnalysisDetail() {
                 Source-Backed Claims
               </h3>
               <div className="space-y-3">
-                {data.source_backed_claims.map((claim, i) => (
+                {data.source_backed_claims.slice(0, 3).map((claim, i) => (
                   <div key={i} className="p-3 bg-surface-variant rounded border border-outline-variant">
-                    <p className="text-sm text-on-surface mb-2">{claim.claim}</p>
+                    <p className="text-sm text-on-surface mb-2 line-clamp-2">{claim.claim}</p>
                     {claim.source && (
                       <div className="flex flex-wrap gap-1.5">
                         <span className="text-[10px] bg-surface-container-high px-1.5 py-0.5 rounded data-font text-on-surface-variant">
@@ -388,6 +409,9 @@ export default function AnalysisDetail() {
                   </div>
                 ))}
               </div>
+              {data.source_backed_claims.length > 3 && (
+                <p className="text-xs text-on-surface-variant mt-2 italic">+{data.source_backed_claims.length - 3} more</p>
+              )}
             </div>
           )}
 
@@ -399,13 +423,16 @@ export default function AnalysisDetail() {
                 Invalidating Conditions
               </h3>
               <ul className="space-y-2">
-                {analysis.invalidating_conditions.map((item, i) => (
+                {analysis.invalidating_conditions.slice(0, 3).map((item, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                     <span className="material-symbols-outlined text-error text-base mt-0.5">block</span>
-                    {item}
+                    <span className="line-clamp-2">{item}</span>
                   </li>
                 ))}
               </ul>
+              {analysis.invalidating_conditions.length > 3 && (
+                <p className="text-xs text-on-surface-variant mt-2 italic">+{analysis.invalidating_conditions.length - 3} more</p>
+              )}
             </div>
           )}
         </div>

@@ -20,8 +20,6 @@ async def main() -> None:
         result = await get_market_overview(session)
         print(json.dumps({
             "market": result.market,
-            "indices": result.indices,
-            "top_movers_count": len(result.top_movers),
             "major_events_count": len(result.major_events),
             "macro_environment": {k: (str(v) if hasattr(v, "isoformat") else v) for k, v in result.macro_environment.items()},
         }, indent=2, default=str))

@@ -60,20 +60,6 @@ export default function TopNav() {
           <span className="material-symbols-outlined">notifications</span>
           <span className="absolute top-1 right-1 w-2 h-2 bg-error rounded-full border border-surface-container-low" />
         </button>
-        <button
-          aria-label="Schedule"
-          className="text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer p-1"
-          onClick={() => toast('Scheduler feature coming soon', 'info')}
-        >
-          <span className="material-symbols-outlined">schedule</span>
-        </button>
-        <button
-          aria-label="Settings"
-          className="text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer p-1"
-          onClick={() => toast('Settings feature coming soon', 'info')}
-        >
-          <span className="material-symbols-outlined">settings</span>
-        </button>
 
         {isAuthenticated ? (
           <div className="relative" ref={menuRef}>

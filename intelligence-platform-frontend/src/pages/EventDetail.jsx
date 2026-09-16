@@ -93,10 +93,10 @@ export default function EventDetail() {
               </p>
             )}
           </div>
-          {item.company_id && (
+          {item.ticker && (
             <div className="text-right">
-              <p className="text-xs text-on-surface-variant mb-1 data-font uppercase">Company ID</p>
-              <p className="text-lg font-semibold text-on-surface data-font">#{item.company_id}</p>
+              <p className="text-xs text-on-surface-variant mb-1 data-font uppercase">Ticker</p>
+              <p className="text-lg font-semibold text-on-surface data-font">{item.ticker}</p>
             </div>
           )}
         </div>

@@ -271,12 +271,12 @@ export default function Analysis() {
               Quick Actions
             </h3>
             <div className="space-y-2">
-              <a href="/portfolio" className="block p-3 bg-surface-variant border border-outline-variant rounded hover:bg-surface-bright hover:border-secondary transition-colors group">
+              <a href="/opportunities" className="block p-3 bg-surface-variant border border-outline-variant rounded hover:bg-surface-bright hover:border-secondary transition-colors group">
                 <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">pie_chart</span>
-                  <span className="text-sm text-on-surface">View Investment Opportunities</span>
+                  <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">insights</span>
+                  <span className="text-sm text-on-surface">View Opportunities</span>
                 </div>
-                <p className="text-xs text-on-surface-variant mt-1">See scored recommendations and optimize portfolio allocation.</p>
+                <p className="text-xs text-on-surface-variant mt-1">AI-scored opportunities with score breakdown.</p>
               </a>
               <a href="/backtest" className="block p-3 bg-surface-variant border border-outline-variant rounded hover:bg-surface-bright hover:border-secondary transition-colors group">
                 <div className="flex items-center gap-2">

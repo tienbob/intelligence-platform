@@ -25,14 +25,13 @@ class StockQuote(BaseModel):
 
 
 class StockPricePoint(BaseModel):
-    """Single OHLCV data point."""
+    """Single OHLCV data point — only fields rendered by the FE price table."""
 
     timestamp: datetime
     open: float
     high: float
     low: float
     close: float
-    adjusted_close: Optional[float] = None
     volume: int
 
     model_config = {"from_attributes": True}

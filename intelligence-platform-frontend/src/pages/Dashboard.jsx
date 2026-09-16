@@ -212,9 +212,9 @@ export default function Dashboard() {
                 <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">monitoring</span>
                 <span className="text-xs text-on-surface">Deep Analysis</span>
               </a>
-              <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" href="/portfolio">
-                <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">pie_chart</span>
-                <span className="text-xs text-on-surface">Portfolio Tools</span>
+              <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" href="/opportunities">
+                <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">insights</span>
+                <span className="text-xs text-on-surface">Opportunities</span>
               </a>
               <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center col-span-2" href="/news">
                 <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">newspaper</span>

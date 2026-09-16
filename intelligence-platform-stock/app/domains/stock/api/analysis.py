@@ -17,7 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import check_idempotency, store_idempotency_result
+from app.core.security import (
+    check_idempotency,
+    get_actor,
+    owns_row,
+    store_idempotency_result,
+    visible_to_actor,
+)
 from app.domains.stock.models.analysis import Analysis, AnalysisSource, InvestmentScore
 from app.domains.stock.models.company import Company
 from app.domains.stock.schemas.analysis import (
@@ -38,23 +44,26 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 @router.get("/jobs")
 async def list_analysis_jobs(
+    request: Request,
     limit: int = Query(default=20, le=100),
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List analysis jobs with status."""
-    from sqlalchemy import func
+    """List analysis jobs (lean: only fields the FE renders).
 
+    User-bound: own rows + system (user_id IS NULL) rows. Global market
+    data is intentionally NOT scoped here.
+    """
+    actor = get_actor(request)
     result = await db.execute(
         select(Analysis, Company.ticker)
         .join(Company, Company.id == Analysis.company_id)
+        .where(visible_to_actor(Analysis.user_id, actor))
         .order_by(Analysis.created_at.desc())
         .offset(offset)
         .limit(limit)
     )
     rows = result.all()
-
-    total = (await db.execute(select(func.count(Analysis.id)))).scalar() or 0
 
     jobs = []
     for analysis, ticker in rows:
@@ -65,13 +74,9 @@ async def list_analysis_jobs(
             "status": analysis.status,
             "investment_score": analysis.investment_score,
             "risk_score": analysis.risk_score,
-            "confidence_score": analysis.confidence_score,
-            "llm_model": analysis.llm_model,
-            "llm_tokens_used": analysis.llm_tokens_used,
-            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
         })
 
-    return {"jobs": jobs, "total": total}
+    return {"jobs": jobs}
 
 
 async def run_company_analysis(
@@ -157,10 +162,11 @@ async def run_company_analysis(
 async def create_company_analysis(
     request: AnalysisRequest,
     background_tasks: BackgroundTasks,
+    fastapi_request: Request,
     db: AsyncSession = Depends(get_db),
-    fastapi_request: Request = None,
 ):
-    """Create a company analysis job (Section 46)."""
+    """Create a company analysis job (Section 46). User-bound to the caller."""
+    actor = get_actor(fastapi_request)
     # Idempotency check (Architecture §101)
     idempotency_key = await check_idempotency(fastapi_request)
 
@@ -179,6 +185,7 @@ async def create_company_analysis(
     analysis = Analysis(
         analysis_id=analysis_id,
         company_id=company.id,
+        user_id=actor.get("user_id"),
         analysis_type="company",
         analysis_version="1.0",
         status="queued",
@@ -207,13 +214,17 @@ async def create_company_analysis(
 
 
 @router.delete("/{analysis_id}")
-async def delete_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
-    """Cancel or delete an analysis job."""
+async def delete_analysis(
+    analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Cancel or delete an analysis job (owner or admin/system only)."""
     result = await db.execute(
         select(Analysis).where(Analysis.analysis_id == analysis_id)
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if not owns_row(analysis.user_id, get_actor(request)):
         raise HTTPException(status_code=404, detail="Analysis not found")
 
     active_statuses = {"queued", "collecting_data", "calculating_metrics", "retrieving_context", "llm_analysis", "risk_analysis"}
@@ -229,13 +240,18 @@ async def delete_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(analysis_id: str, db: AsyncSession = Depends(get_db)):
-    """Get analysis status and results (Section 46)."""
+async def get_analysis(
+    analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Get analysis status and results (owner/system row, or admin/system)."""
     result = await db.execute(
         select(Analysis).where(Analysis.analysis_id == analysis_id)
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if not owns_row(analysis.user_id, get_actor(request)):
+        # Don't leak existence of another user's analysis — same 404 shape.
         raise HTTPException(status_code=404, detail="Analysis not found")
 
     # Get ticker

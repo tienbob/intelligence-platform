@@ -300,6 +300,7 @@ class BacktestEngine:
         tickers: list[str] | None = None,
         snapshot_id: int | None = None,
         existing_run: BacktestRun | None = None,
+        user_id: int | None = None,
     ) -> BacktestRun:
         """
         Execute a strategy backtest (Section 162).
@@ -343,6 +344,7 @@ class BacktestEngine:
                 benchmark_ticker=benchmark_ticker,
                 parameters=parameters,
                 snapshot_id=snapshot_id,
+                user_id=user_id,
                 scoring_model=settings.SCORING_MODEL,
                 scoring_version=settings.SCORING_VERSION,
             )
@@ -1550,10 +1552,15 @@ class BacktestEngine:
         """Get a backtest run by ID."""
         return await self.session.get(BacktestRun, run_id)
 
-    async def list_runs(self, limit: int = 20, offset: int = 0) -> list[BacktestRun]:
-        """List backtest runs."""
+    async def list_runs(
+        self, limit: int = 20, offset: int = 0, actor: dict[str, Any] | None = None
+    ) -> list[BacktestRun]:
+        """List backtest runs (own + system rows; admin sees all)."""
+        from app.core.security import visible_to_actor
+
         result = await self.session.execute(
             select(BacktestRun)
+            .where(visible_to_actor(BacktestRun.user_id, actor))
             .order_by(desc(BacktestRun.created_at))
             .offset(offset)
             .limit(limit)

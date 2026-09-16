@@ -5,7 +5,7 @@ Alerts API endpoints (Section 42).
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -50,7 +50,6 @@ async def create_alert(
         alert_type=alert.alert_type,
         severity=alert.severity,
         message=alert.message,
-        data=alert.data,
     )
 
 
@@ -61,43 +60,72 @@ async def list_alerts(
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List alerts."""
-    query = select(Alert)
-    count_query = select(func.count(Alert.id))
+    """List alerts (lean rows: what the FE feed renders)."""
+    query = (
+        select(Alert, Company.ticker)
+        .join(Company, Company.id == Alert.company_id, isouter=True)
+    )
 
     if unread_only:
         query = query.where(Alert.is_read == False)  # noqa: E712
-        count_query = count_query.where(Alert.is_read == False)  # noqa: E712
 
     query = query.order_by(desc(Alert.created_at)).offset(offset).limit(limit)
     result = await db.execute(query)
-    alerts = result.scalars().all()
-
-    total = (await db.execute(count_query)).scalar() or 0
+    rows = result.all()
 
     return AlertListResponse(
-        alerts=[AlertResponse.model_validate(a) for a in alerts],
-        total=total,
+        alerts=[
+            AlertResponse(
+                id=a.id,
+                ticker=t,
+                alert_type=a.alert_type,
+                severity=a.severity,
+                message=a.message,
+            )
+            for a, t in rows
+        ],
     )
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
 async def get_alert(alert_id: int, db: AsyncSession = Depends(get_db)):
     """Get a single alert."""
-    result = await db.execute(select(Alert).where(Alert.id == alert_id))
-    alert = result.scalar_one_or_none()
-    if not alert:
+    result = await db.execute(
+        select(Alert, Company.ticker)
+        .join(Company, Company.id == Alert.company_id, isouter=True)
+        .where(Alert.id == alert_id)
+    )
+    row = result.one_or_none()
+    if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return AlertResponse.model_validate(alert)
+    alert, ticker = row
+    return AlertResponse(
+        id=alert.id,
+        ticker=ticker,
+        alert_type=alert.alert_type,
+        severity=alert.severity,
+        message=alert.message,
+    )
 
 
 @router.post("/{alert_id}/read", response_model=AlertResponse)
 async def mark_alert_read(alert_id: int, db: AsyncSession = Depends(get_db)):
     """Mark an alert as read."""
-    result = await db.execute(select(Alert).where(Alert.id == alert_id))
-    alert = result.scalar_one_or_none()
-    if not alert:
+    result = await db.execute(
+        select(Alert, Company.ticker)
+        .join(Company, Company.id == Alert.company_id, isouter=True)
+        .where(Alert.id == alert_id)
+    )
+    row = result.one_or_none()
+    if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
+    alert, ticker = row
     alert.is_read = True
     await db.commit()
-    return AlertResponse.model_validate(alert)
+    return AlertResponse(
+        id=alert.id,
+        ticker=ticker,
+        alert_type=alert.alert_type,
+        severity=alert.severity,
+        message=alert.message,
+    )
