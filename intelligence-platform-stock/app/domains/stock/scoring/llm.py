@@ -90,6 +90,7 @@ class LLMService:
                 max_attempts=settings.LLM_MAX_ATTEMPTS,
                 retry_base_delay=settings.LLM_RETRY_BASE_DELAY,
                 retry_max_delay=settings.LLM_RETRY_MAX_DELAY,
+                fallback_model=settings.LLM_FALLBACK_MODEL,
             )
         return self._engine
 

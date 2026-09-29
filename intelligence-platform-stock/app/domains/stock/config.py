@@ -51,9 +51,13 @@ class StockConfig(BaseSettings):
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 4096
     # App-level retry for transient LLM provider errors (429/5xx/timeouts).
-    LLM_MAX_ATTEMPTS: int = 4
-    LLM_RETRY_BASE_DELAY: float = 5.0
-    LLM_RETRY_MAX_DELAY: float = 60.0
+    LLM_MAX_ATTEMPTS: int = 6
+    LLM_RETRY_BASE_DELAY: float = 10.0
+    LLM_RETRY_MAX_DELAY: float = 120.0
+    # When the primary model exhausts its retries on a TRANSIENT error
+    # (e.g. demand-spike 503s on a hot model), retry with this model before
+    # giving up. Same provider/base_url; None disables the fallback.
+    LLM_FALLBACK_MODEL: Optional[str] = None
 
     # ── Embeddings ───────────────────────────────────────────────
     EMBEDDING_PROVIDER: str = "openai"

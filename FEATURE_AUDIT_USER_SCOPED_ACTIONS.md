@@ -176,5 +176,26 @@ Issues found while validating the live AAPL analysis payload (`a5f09ef0-…`) �
 
 **Validation:** backend suite **165 passed** (6 new: 4 citation-support framework tests + 2 detail-response regression tests); frontend lint 0 problems; vite build green.
 
+---
+
+## 8. Gemini Resilience — Live Docker Round (2026-09-29, fourth round)
+
+**Root cause found in production logs:** the Gemini key is on the **free tier — 20 requests/day per model** (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`). The recurring failures were (a) 503 demand spikes, which hit free-tier traffic hardest, and (b) hard per-day 429s once the quota is spent, which *no amount of retrying can fix*.
+
+| Fix | Detail |
+|---|---|
+| **Model fallback** | New `LLM_FALLBACK_MODEL` setting: when the primary exhausts retries on a transient error, the same backoff loop runs against the fallback model. `build_meta` reports the model that actually produced the output (`llm_model` column), so provenance survives failovers. |
+| **Daily-quota fast-fail** | `classify_llm_error` now recognizes free-tier per-day 429s (`free_tier`/`PerDay` markers) and returns `DAILY_QUOTA` — the attempt loop raises immediately instead of burning minutes of backoff on a model that cannot succeed today, and the fallback engages at once. |
+| **Longer patience** | Defaults raised to 6 attempts / 10s base / 120s cap (env-tunable). |
+| **Fallback chosen by live probe** | `gemini-2.5-pro`/`gemini-2.5-flash` are 404 "no longer available to new users"; `3.6/3.8-flash` are 503-overloaded. **`gemini-3.5-flash-lite` probed 200 with JSON mode** → set as the live fallback (own quota, same generation). |
+| **Claim value polish** | Whole floats drop the ".0" (`150000000000`, not `150000000000.0`). |
+
+**Live verification (Docker stack):** with `gemini-3.5-flash` daily-quota-dead, a fresh AAPL analysis **completed in ~10s** — one primary attempt (429) → immediate failover → `gemini-3.5-flash-lite` produced the result (DB `llm_model` confirms), with the slim payload, verbatim claim values ("John Ternus CEO"), and invalidating-conditions passthrough all intact. The transient-failure message and full retry ladder were also observed live in earlier runs.
+
+**Tests:** 170 passed (new: fallback engage/order/provenance, non-transient never falls back, daily-quota immediate failover, claim-value formatting).
+
+**Operational notes:** (1) `docker compose restart` does NOT re-read `env_file` — use `docker compose up -d <svc>` to apply env changes. (2) The real long-term fix for the free tier is a paid API key; the fallback only doubles the effective daily budget (20/model).
+
+
 
 

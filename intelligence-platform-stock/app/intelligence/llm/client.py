@@ -19,6 +19,12 @@ from app.intelligence.llm.structured_output import extract_json
 
 logger = get_logger(__name__)
 
+# Sentinel returned by classify_llm_error: the model is rate-limited by a
+# per-DAY quota (e.g. Gemini free tier: 20 requests/day/model). Retrying the
+# same model cannot succeed until the quota resets — the only useful move is
+# failing over to another model immediately.
+DAILY_QUOTA = -2.0
+
 
 def classify_llm_error(exc: Exception) -> float | None:
     """
@@ -45,6 +51,14 @@ def classify_llm_error(exc: Exception) -> float | None:
     )
     if not isinstance(exc, transient):
         return None
+    # Per-day quota exhaustion (e.g. Gemini free tier —
+    # "GenerateRequestsPerDayPerProjectPerModel-FreeTier"): retrying the
+    # same model is pointless; fail over to the fallback model immediately.
+    msg = str(exc).lower()
+    if isinstance(exc, openai.RateLimitError) and (
+        "free_tier" in msg or "perday" in msg or "per day" in msg
+    ):
+        return DAILY_QUOTA
     retry_after: float = -1.0
     headers = getattr(getattr(exc, "response", None), "headers", None)
     if headers is not None:
@@ -78,6 +92,7 @@ class LLMClient:
         max_attempts: int = 4,
         retry_base_delay: float = 5.0,
         retry_max_delay: float = 60.0,
+        fallback_model: str | None = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -88,10 +103,16 @@ class LLMClient:
         self.timeout = timeout
         self.sdk_max_retries = sdk_max_retries
         # App-level retry policy for transient provider errors (see
-        # _create_with_retry). Total attempts = max_attempts.
+        # _create_with_retry). Total attempts = max_attempts per model.
         self.max_attempts = max(1, max_attempts)
         self.retry_base_delay = retry_base_delay
         self.retry_max_delay = retry_max_delay
+        # Used only when the primary model exhausts retries on a transient
+        # error (e.g. demand-spike 503s on a hot model).
+        self.fallback_model = fallback_model
+        # Model that actually produced the last successful response —
+        # build_meta reports this so provenance survives fallbacks.
+        self.last_model_used: str | None = None
         self._client: Any = None
 
     async def get_client(self) -> Any:
@@ -149,34 +170,71 @@ class LLMClient:
         self, client: Any, system_prompt: str, user_message: str
     ) -> Any:
         """
-        ``chat.completions.create`` with application-level backoff.
+        ``chat.completions.create`` with application-level backoff + fallback.
 
         The SDK retries connection errors internally (``sdk_max_retries``,
         short fixed delay), but provider demand spikes like 503 "This model
-        is currently experiencing high demand" can outlast it. This loop
-        adds exponential backoff with jitter — honoring server
-        ``Retry-After`` when present — so a temporary provider outage rides
-        out instead of failing the whole analysis job.
+        is currently experiencing high demand" can outlast it — and, as seen
+        live, can even outlast a full backoff loop on a hot model. So:
+
+        1. Retry the primary model with exponential backoff + jitter,
+           honoring server ``Retry-After`` when present.
+        2. If the primary exhausts its retries on a **transient** error and a
+           ``fallback_model`` is configured, run the same loop against the
+           fallback model before giving up.
 
         Non-transient errors (auth, bad request, model not found) raise
-        immediately: retrying those cannot succeed.
+        immediately: retrying cannot succeed, and falling back would only
+        mask a configuration problem.
         """
+        try:
+            return await self._attempt_loop(client, self.model, system_prompt, user_message)
+        except Exception as exc:
+            if (
+                not self.fallback_model
+                or self.fallback_model == self.model
+                or classify_llm_error(exc) is None
+            ):
+                raise
+            logger.warning(
+                "Primary model %s unavailable after %d attempts (%s) — retrying with fallback model %s",
+                self.model,
+                self.max_attempts,
+                exc,
+                self.fallback_model,
+            )
+        return await self._attempt_loop(
+            client, self.fallback_model, system_prompt, user_message
+        )
+
+    async def _attempt_loop(
+        self, client: Any, model: str, system_prompt: str, user_message: str
+    ) -> Any:
+        """One model's attempt loop: exponential backoff + jitter."""
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return await client.chat.completions.create(
-                    model=self.model,
+                response = await client.chat.completions.create(
+                    model=model,
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     response_format={"type": "json_object"},
                 )
+                self.last_model_used = model
+                return response
             except Exception as exc:
                 retry_after = classify_llm_error(exc)
-                if retry_after is None or attempt >= self.max_attempts:
+                # Daily-quota exhaustion (DAILY_QUOTA) raises immediately:
+                # retrying the same model cannot succeed today.
+                if (
+                    retry_after is None
+                    or retry_after == DAILY_QUOTA
+                    or attempt >= self.max_attempts
+                ):
                     raise
                 if retry_after >= 0:
                     delay = min(retry_after, self.retry_max_delay)
@@ -187,9 +245,10 @@ class LLMClient:
                     )
                 delay += random.uniform(0, 1)  # jitter: avoid thundering herds
                 logger.warning(
-                    "Transient LLM provider error (attempt %d/%d) — retrying in %.1fs: %s",
+                    "Transient LLM provider error (attempt %d/%d, model %s) — retrying in %.1fs: %s",
                     attempt,
                     self.max_attempts,
+                    model,
                     delay,
                     exc,
                 )
@@ -206,7 +265,7 @@ class LLMClient:
     ) -> dict[str, Any]:
         """Assemble the standard ``_meta`` audit block."""
         return {
-            "model": self.model,
+            "model": self.last_model_used or self.model,
             "provider": self.provider,
             "tokens_used": tokens_used,
             "prompt_name": prompt_name,

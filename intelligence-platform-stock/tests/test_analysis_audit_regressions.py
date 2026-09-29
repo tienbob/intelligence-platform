@@ -92,6 +92,15 @@ def test_detail_uses_only_its_own_score_snapshot(legacy, confidence):
     assert db.execute.await_count == 3
 
 
+def test_claim_value_formatting():
+    from app.domains.stock.services.company_analysis import _claim_value
+
+    assert _claim_value(150000000000.0) == "150000000000"  # no ".0" wart
+    assert _claim_value(1.0585) == "1.0585"
+    assert _claim_value("John Ternus") == "John Ternus"  # non-numeric survives
+    assert _claim_value(None) is None
+
+
 def test_detail_response_strips_debug_blocks():
     session = _FakeSession()
     svc, _ = _service(session, _FakeLLM())

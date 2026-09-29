@@ -65,11 +65,13 @@ def _claim_value(v: Any) -> str | None:
     """Persist the LLM-supplied claim value verbatim (DB column is String).
 
     Claim values are not always numeric — e.g. ``ceo_transition: "John
-    Ternus"`` — so the column stores the raw value; numeric values keep
-    their natural string form ("36.89").
+    Ternus"`` — so the column stores the raw value. Whole floats drop the
+    cosmetic ".0" (150000000000, not "150000000000.0").
     """
     if v is None:
         return None
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
     return str(v)
 
 
