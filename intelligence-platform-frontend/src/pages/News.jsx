@@ -4,6 +4,9 @@ import { getNews, getMarketOverview, getEvents } from '../services/api';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
+// Visible news cards before the Correlated News feed starts scrolling.
+const NEWS_VIEW_LIMIT = 10;
+
 // Map UI labels to actual API event type codes.
 const EVENT_TYPE_OPTIONS = {
   'Earnings': ['EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_IN_LINE', 'EARNINGS_REPORT', 'GUIDANCE_UPDATE'],
@@ -222,8 +225,10 @@ export default function News() {
                 <span className="material-symbols-outlined text-primary">feed</span>
                 Correlated News
               </h2>
+              <span className="text-xs text-on-surface-variant data-font">{news.length} {news.length === 1 ? 'article' : 'articles'}</span>
             </div>
-            <div className="space-y-3 flex-1 overflow-y-auto">
+            {/* ~10 cards visible; scrolls only when there are more. */}
+            <div className={`space-y-3 flex-1 overflow-y-auto ${news.length > NEWS_VIEW_LIMIT ? 'max-h-[68rem] pr-1' : ''}`}>
               {news.length > 0 ? (
                 news.map((article) => (
                   <div
