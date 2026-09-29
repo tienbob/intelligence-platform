@@ -7,6 +7,8 @@ const navItems = [
   { to: '/companies', label: 'Companies', icon: 'business' },
   { to: '/search', label: 'Search', icon: 'search' },
   { to: '/opportunities', label: 'Opportunities', icon: 'insights' },
+  { to: '/news', label: 'News', icon: 'newspaper' },
+  { to: '/events', label: 'Events', icon: 'event' },
   { to: '/analysis', label: 'AI Jobs', icon: 'memory' },
   { to: '/backtest', label: 'Backtest', icon: 'history' },
   { to: '/alerts', label: 'Alerts', icon: 'notification_important' },
@@ -30,7 +32,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 py-4 flex flex-col gap-1">
+      <nav className="flex-1 py-4 flex flex-col gap-1 overflow-y-auto">
         {navItems.map(({ to, label, icon }) => {
           const isActive = to === '/dashboard' ? location.pathname === '/dashboard' : location.pathname.startsWith(to);
           return (

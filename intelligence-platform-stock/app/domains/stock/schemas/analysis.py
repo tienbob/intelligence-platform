@@ -106,6 +106,8 @@ class AnalysisResponse(BaseModel):
     analysis_id: str
     status: str
     ticker: Optional[str] = None
+    failure_reason: Optional[str] = None
+    request_options: Optional[dict[str, Any]] = None
     investment_score: Optional[float] = None
     risk_score: Optional[float] = None
     confidence: Optional[float] = None
@@ -114,6 +116,9 @@ class AnalysisResponse(BaseModel):
     analysis: Optional[dict[str, Any]] = None
     recommendation: Optional[InvestmentRecommendation] = None
     created_at: Optional[str] = None
+    # True when the caller may cancel/delete this analysis (owner or admin).
+    # System rows (user_id IS NULL) are read-only for regular users.
+    can_manage: bool = False
 
     model_config = {"from_attributes": True}
 

@@ -87,6 +87,9 @@ class LLMService:
                 provider=self.provider,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                max_attempts=settings.LLM_MAX_ATTEMPTS,
+                retry_base_delay=settings.LLM_RETRY_BASE_DELAY,
+                retry_max_delay=settings.LLM_RETRY_MAX_DELAY,
             )
         return self._engine
 

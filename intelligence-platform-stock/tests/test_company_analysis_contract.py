@@ -104,6 +104,9 @@ class _FakeSession:
             obj.id = 9000 + len(self.added)
         self.added.append(obj)
 
+    async def execute(self, statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: self.existing)
+
     async def flush(self):
         pass
 
@@ -179,6 +182,7 @@ def test_api_existing_row_mode_satisfies_same_contract():
         analysis_id="existing-1", id=42, status="collecting_data",
         investment_score=None, risk_score=None,
     )
+    session.existing = existing
     stages = []
 
     async def on_stage(name):

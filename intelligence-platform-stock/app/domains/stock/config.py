@@ -50,6 +50,10 @@ class StockConfig(BaseSettings):
     LLM_BASE_URL: Optional[str] = None
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 4096
+    # App-level retry for transient LLM provider errors (429/5xx/timeouts).
+    LLM_MAX_ATTEMPTS: int = 4
+    LLM_RETRY_BASE_DELAY: float = 5.0
+    LLM_RETRY_MAX_DELAY: float = 60.0
 
     # ── Embeddings ───────────────────────────────────────────────
     EMBEDDING_PROVIDER: str = "openai"

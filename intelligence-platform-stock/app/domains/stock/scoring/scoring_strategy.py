@@ -83,6 +83,7 @@ class InvestmentScoringStrategy:
             )
 
         result = {
+            "metadata": {"score_id": score_row.id},
             "score": float(score_row.overall_score),
             "confidence": (
                 float(score_row.confidence)

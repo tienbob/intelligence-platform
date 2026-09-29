@@ -74,6 +74,17 @@ async def get_investment_opportunities(
     )
     rows = result.all()
 
+    # Tie-safe dedupe: the max-timestamp join can yield multiple rows per
+    # company when two scores share the same timestamp — keep the first.
+    seen_company_ids: set = set()
+    deduped: list = []
+    for score, company in rows:
+        if company.id in seen_company_ids:
+            continue
+        seen_company_ids.add(company.id)
+        deduped.append((score, company))
+    rows = deduped
+
     # Latest completed deep analysis per company (for linking + primary score).
     # USER-BOUND: scope to own + system rows so the analysis_id link never
     # leaks another user's analysis.
@@ -99,19 +110,40 @@ async def get_investment_opportunities(
     )
     latest_analysis_by_company = {a.company_id: a for a in analysis_result.scalars().all()}
 
+    # Batch-fetch the latest risk metric per company (one query instead of
+    # one query per company in the loop below).
+    company_ids = [company.id for _, company in rows]
+    risk_by_company: dict = {}
+    if company_ids:
+        latest_risk_subq = (
+            select(
+                RiskMetric.company_id,
+                func.max(RiskMetric.timestamp).label("max_ts"),
+            )
+            .where(RiskMetric.company_id.in_(company_ids))
+            .group_by(RiskMetric.company_id)
+            .subquery()
+        )
+        risk_result = await db.execute(
+            select(RiskMetric)
+            .join(
+                latest_risk_subq,
+                (RiskMetric.company_id == latest_risk_subq.c.company_id)
+                & (RiskMetric.timestamp == latest_risk_subq.c.max_ts),
+            )
+            .where(RiskMetric.company_id.in_(company_ids))
+        )
+        for rm in risk_result.scalars().all():
+            # setdefault: first row wins on timestamp ties.
+            risk_by_company.setdefault(rm.company_id, rm)
+
     opportunities = []
     for score, company in rows:
         if sector and company.sector != sector:
             continue
 
-        # Risk metric
-        risk_result = await db.execute(
-            select(RiskMetric)
-            .where(RiskMetric.company_id == company.id)
-            .order_by(desc(RiskMetric.timestamp))
-            .limit(1)
-        )
-        risk = risk_result.scalar_one_or_none()
+        # Risk metric (batch-fetched above)
+        risk = risk_by_company.get(company.id)
 
         # Build the screening-model component breakdown.
         components = []

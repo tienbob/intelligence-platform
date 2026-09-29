@@ -6,6 +6,7 @@ import StatusChip from '../components/StatusChip';
 export default function Alerts() {
   const toast = useToast();
   const [alerts, setAlerts] = useState([]);
+  const [error, setError] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -19,8 +20,9 @@ export default function Alerts() {
     try {
       const data = await getAlerts({ limit: 50 });
       setAlerts(data?.alerts || []);
-    } catch {
-      // API not available
+      setError(null);
+    } catch (e) {
+      setError(e.message || 'Failed to load alerts');
     }
   }
 
@@ -78,6 +80,13 @@ export default function Alerts() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load alerts: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={loadAlerts}>Retry</button>
+        </div>
+      )}
 
       {/* Create Alert Form */}
       {showCreate && (
@@ -207,14 +216,14 @@ export default function Alerts() {
                     </td>
                   </tr>
                 ))
-              ) : (
+              ) : !error ? (
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">notifications_off</span>
                     <p>No active alerts. System monitoring is running.</p>
                   </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>

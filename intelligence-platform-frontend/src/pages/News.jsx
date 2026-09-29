@@ -4,6 +4,16 @@ import { getNews, getMarketOverview, getEvents } from '../services/api';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
+// Map UI labels to actual API event type codes.
+const EVENT_TYPE_OPTIONS = {
+  'Earnings': ['EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_IN_LINE', 'EARNINGS_REPORT', 'GUIDANCE_UPDATE'],
+  'Regulatory/Legal': ['REGULATORY', 'LEGAL', 'INSIDER_TRADING', 'INSTITUTIONAL_CHANGE'],
+  'Analyst': ['ANALYST'],
+  'Management': ['MANAGEMENT_CHANGE', 'DIVIDEND_CHANGE', 'STOCK_SPLIT', 'BUYBACK'],
+  'Macro': ['MACRO_EVENT', 'SECTOR_EVENT'],
+  'Corporate': ['PRODUCT_LAUNCH', 'MA', 'SUPPLY_CHAIN', 'OTHER'],
+};
+
 export default function News() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -13,15 +23,7 @@ export default function News() {
   const [vixChange, setVixChange] = useState(null);
   const [tickerFilter, setTickerFilter] = useState('');
   const [minImpact, setMinImpact] = useState(0.5);
-  // Map UI labels to actual API event type codes.
-  const EVENT_TYPE_OPTIONS = {
-    'Earnings': ['EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_IN_LINE', 'EARNINGS_REPORT', 'GUIDANCE_UPDATE'],
-    'Regulatory/Legal': ['REGULATORY', 'LEGAL', 'INSIDER_TRADING', 'INSTITUTIONAL_CHANGE'],
-    'Analyst': ['ANALYST'],
-    'Management': ['MANAGEMENT_CHANGE', 'DIVIDEND_CHANGE', 'STOCK_SPLIT', 'BUYBACK'],
-    'Macro': ['MACRO_EVENT', 'SECTOR_EVENT'],
-    'Corporate': ['PRODUCT_LAUNCH', 'MA', 'SUPPLY_CHAIN', 'OTHER'],
-  };
+  const [error, setError] = useState(null);
   const [eventTypes, setEventTypes] = useState({
     'Earnings': true,
     'Regulatory/Legal': true,
@@ -53,8 +55,9 @@ export default function News() {
       const v = mktData?.macro_environment?.vix;
       setVix(v != null ? v.toFixed(2) : null);
       setVixChange(v != null && v < 20 ? 'low' : v < 30 ? 'moderate' : 'high');
-    } catch {
-      // API not available
+      setError(null);
+    } catch (e) {
+      setError(e.message || 'Failed to load market intelligence');
     }
   }, [tickerFilter, eventTypes, minImpact]);
 
@@ -80,6 +83,13 @@ export default function News() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load market intelligence: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={() => loadData()}>Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-12 gap-gutter">
         {/* Filters Sidebar (Span 3) */}

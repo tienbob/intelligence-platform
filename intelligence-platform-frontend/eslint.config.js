@@ -17,5 +17,14 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // This codebase's standard pattern is async data loading initiated from
+      // useEffect (state setters run after `await`); the strict new rule flags
+      // that pattern wholesale, which is a false positive for data fetching.
+      "react-hooks/set-state-in-effect": "off",
+      // Context providers intentionally co-export their hooks (useAuth,
+      // useToast) alongside the provider component.
+      "react-refresh/only-export-components": "off",
+    },
   },
 ]);

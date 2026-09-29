@@ -13,18 +13,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import (
     check_idempotency,
     get_actor,
+    is_admin_actor,
     owns_row,
     store_idempotency_result,
     visible_to_actor,
 )
-from app.domains.stock.models.analysis import Analysis, AnalysisSource, InvestmentScore
+from app.domains.stock.models.analysis import Analysis, AnalysisSource
 from app.domains.stock.models.company import Company
 from app.domains.stock.schemas.analysis import (
     AnalysisCreateResponse,
@@ -37,7 +38,9 @@ from app.domains.stock.scoring.context_builder import ContextBuilder
 from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
 from app.domains.stock.scoring.evidence import EvidenceAttributor
 from app.domains.stock.scoring.llm import LLMService
-from app.domains.stock.services.company_analysis import execute_company_analysis
+from app.domains.stock.services.company_analysis import (
+    AnalysisCancelled, execute_company_analysis, lock_active_analysis,
+)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -45,8 +48,8 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 @router.get("/jobs")
 async def list_analysis_jobs(
     request: Request,
-    limit: int = Query(default=20, le=100),
-    offset: int = Query(default=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """List analysis jobs (lean: only fields the FE renders).
@@ -65,6 +68,13 @@ async def list_analysis_jobs(
     )
     rows = result.all()
 
+    counts = await db.execute(
+        select(Analysis.status, func.count()).where(visible_to_actor(Analysis.user_id, actor))
+        .group_by(Analysis.status)
+    )
+    status_counts = dict(counts.all())
+    from app.domains.stock.config import get_stock_config
+
     jobs = []
     for analysis, ticker in rows:
         jobs.append({
@@ -74,9 +84,36 @@ async def list_analysis_jobs(
             "status": analysis.status,
             "investment_score": analysis.investment_score,
             "risk_score": analysis.risk_score,
+            "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
+            "can_manage": is_admin_actor(actor) or (
+                analysis.user_id is not None and analysis.user_id == actor.get("user_id")
+            ),
         })
 
-    return {"jobs": jobs}
+    return {"jobs": jobs, "total": sum(status_counts.values()), "status_counts": status_counts,
+            "supports_inclusions": get_stock_config().ANALYSIS_ENGINE != "framework"}
+
+
+def _failure_reason(exc: Exception) -> str:
+    """Human-readable failure reason for a dead analysis job.
+
+    Transient provider outages (which already exhausted LLMClient's retry
+    loop by the time they surface here) get a specific, actionable message
+    instead of the generic one.
+    """
+    from app.intelligence.llm.client import classify_llm_error
+
+    if classify_llm_error(exc) is not None:
+        return (
+            "The AI provider was temporarily unavailable (high demand or "
+            "rate limit) and did not recover after several retries. This "
+            "is usually temporary — retry the analysis in a few minutes."
+        )
+    return (
+        "Analysis could not finish processing market data or the AI "
+        "response. Retry the analysis; if it fails again, contact support "
+        "with the analysis ID."
+    )
 
 
 async def run_company_analysis(
@@ -105,10 +142,7 @@ async def run_company_analysis(
     async with async_session_factory() as session:
         try:
             # Load analysis record (pre-created by the POST handler).
-            result = await session.execute(
-                select(Analysis).where(Analysis.analysis_id == analysis_id)
-            )
-            analysis = result.scalar_one()
+            analysis = await lock_active_analysis(session, analysis_id)
             analysis.status = "collecting_data"
             await session.commit()
 
@@ -118,13 +152,15 @@ async def run_company_analysis(
             )
             company = company_result.scalar_one_or_none()
             if not company:
-                analysis.status = "failed"
+                current = await lock_active_analysis(session, analysis_id)
+                current.status = "failed"
+                current.llm_analysis = {**(current.llm_analysis or {}), "_failure_reason": "The company is no longer available. Create an analysis for another ticker."}
                 await session.commit()
                 return
 
             async def _stage(name: str) -> None:
-                assert analysis is not None
-                analysis.status = name
+                current = await lock_active_analysis(session, analysis_id)
+                current.status = name
                 await session.commit()
 
             service = CompanyAnalysisService(
@@ -146,12 +182,18 @@ async def run_company_analysis(
                 on_stage=_stage,
             )
 
+        except AnalysisCancelled:
+            await session.rollback()
+            logger.info("Analysis cancelled: %s", analysis_id)
         except Exception as exc:
             # Mark as failed if the analysis record exists
             logger.exception("Analysis failed: %s", exc)
             if analysis is not None:
                 try:
-                    analysis.status = "failed"
+                    await session.rollback()
+                    current = await lock_active_analysis(session, analysis_id)
+                    current.status = "failed"
+                    current.llm_analysis = {**(current.llm_analysis or {}), "_failure_reason": _failure_reason(exc)}
                     await session.commit()
                 except Exception:
                     pass
@@ -167,6 +209,11 @@ async def create_company_analysis(
 ):
     """Create a company analysis job (Section 46). User-bound to the caller."""
     actor = get_actor(fastapi_request)
+    from app.domains.stock.config import get_stock_config
+    if get_stock_config().ANALYSIS_ENGINE == "framework" and not all((
+        request.include_news, request.include_fundamentals, request.include_technical, request.include_macro
+    )):
+        raise HTTPException(status_code=422, detail="This analysis engine requires all data sources")
     # Idempotency check (Architecture §101)
     idempotency_key = await check_idempotency(fastapi_request)
 
@@ -176,7 +223,7 @@ async def create_company_analysis(
     )
     company = result.scalar_one_or_none()
     if not company:
-        from app.domains.stock.api.v1.stocks import _auto_ingest_ticker
+        from app.domains.stock.api.stocks import _auto_ingest_ticker
         company = await _auto_ingest_ticker(request.ticker, db)
         if not company:
             raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
@@ -189,6 +236,7 @@ async def create_company_analysis(
         analysis_type="company",
         analysis_version="1.0",
         status="queued",
+        llm_analysis={"_request": request.model_dump()},
     )
     db.add(analysis)
     await db.commit()
@@ -213,27 +261,41 @@ async def create_company_analysis(
     return response
 
 
-@router.delete("/{analysis_id}")
-async def delete_analysis(
-    analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)
-):
-    """Cancel or delete an analysis job (owner or admin/system only)."""
+ACTIVE_STATUSES = {"queued", "running", "processing", "collecting_data", "calculating_metrics", "retrieving_context", "llm_analysis", "risk_analysis"}
+
+
+async def _lock_owned_analysis(analysis_id: str, request: Request, db: AsyncSession):
     result = await db.execute(
-        select(Analysis).where(Analysis.analysis_id == analysis_id)
+        select(Analysis).where(Analysis.analysis_id == analysis_id).with_for_update()
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
-    if not owns_row(analysis.user_id, get_actor(request)):
+    actor = get_actor(request)
+    if not (is_admin_actor(actor) or (
+        analysis.user_id is not None and analysis.user_id == actor.get("user_id")
+    )):
         raise HTTPException(status_code=404, detail="Analysis not found")
 
-    active_statuses = {"queued", "collecting_data", "calculating_metrics", "retrieving_context", "llm_analysis", "risk_analysis"}
-    if analysis.status in active_statuses:
+    return analysis
+
+
+@router.post("/{analysis_id}/cancel")
+async def cancel_analysis(analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Cancel idempotently; a retry must never delete a job."""
+    analysis = await _lock_owned_analysis(analysis_id, request, db)
+    if analysis.status in ACTIVE_STATUSES:
         analysis.status = "cancelled"
         await db.commit()
-        return {"analysis_id": analysis_id, "status": "cancelled", "message": "Analysis job cancelled"}
+    return {"analysis_id": analysis_id, "status": analysis.status}
 
-    # Already completed, failed, or cancelled — delete the record
+
+@router.delete("/{analysis_id}")
+async def delete_analysis(analysis_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    analysis = await _lock_owned_analysis(analysis_id, request, db)
+    if analysis.status in ACTIVE_STATUSES:
+        raise HTTPException(status_code=409, detail="Cancel the active analysis before deleting it")
+    await db.execute(delete(AnalysisSource).where(AnalysisSource.analysis_id == analysis.id))
     await db.delete(analysis)
     await db.commit()
     return {"analysis_id": analysis_id, "status": "deleted", "message": "Analysis record deleted"}
@@ -250,7 +312,8 @@ async def get_analysis(
     analysis = result.scalar_one_or_none()
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
-    if not owns_row(analysis.user_id, get_actor(request)):
+    actor = get_actor(request)
+    if not owns_row(analysis.user_id, actor):
         # Don't leak existence of another user's analysis — same 404 shape.
         raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -260,14 +323,12 @@ async def get_analysis(
     )
     company = company_result.scalar_one_or_none()
 
-    # Get latest investment score for recommendation
-    score_result = await db.execute(
-        select(InvestmentScore)
-        .where(InvestmentScore.company_id == analysis.company_id)
-        .order_by(InvestmentScore.timestamp.desc())
-        .limit(1)
-    )
-    score = score_result.scalar_one_or_none()
+    # Only use the score captured by this run. Legacy rows have no reliable
+    # score association; leave recommendation/breakdown absent for those rows.
+    from types import SimpleNamespace
+
+    snapshot = (analysis.llm_analysis or {}).get("_score_snapshot")
+    score = SimpleNamespace(**snapshot) if snapshot else None
 
     # Get source-backed claims (Section 32)
     claims_result = await db.execute(
@@ -297,7 +358,11 @@ async def get_analysis(
         # llm confidence = the LLM's self-reported confidence from the analysis payload
         llm_conf = 0.5
         if analysis.llm_analysis and isinstance(analysis.llm_analysis, dict):
-            llm_conf = analysis.llm_analysis.get("confidence", 0.5)
+            from app.domains.stock.scoring.analysis_validator import normalize_confidence, AnalysisValidationError
+            try:
+                llm_conf = normalize_confidence(analysis.llm_analysis.get("confidence"))
+            except AnalysisValidationError:
+                llm_conf = 0.5  # Historical output may predate normalization.
         # overall = Python-computed blend (e.g. geometric-ish mean of the three)
         overall = round((data_conf + quant_conf + llm_conf) / 3.0, 4)
         confidence_breakdown = ConfidenceBreakdown(
@@ -330,6 +395,8 @@ async def get_analysis(
     return AnalysisResponse(
         analysis_id=analysis.analysis_id,
         status=analysis.status,
+        failure_reason=(analysis.llm_analysis or {}).get("_failure_reason") if analysis.status == "failed" else None,
+        request_options=(analysis.llm_analysis or {}).get("_request"),
         ticker=company.ticker if company else None,
         investment_score=analysis.investment_score,
         risk_score=analysis.risk_score,
@@ -339,4 +406,9 @@ async def get_analysis(
         analysis=analysis.llm_analysis,
         recommendation=recommendation,
         created_at=analysis.created_at.isoformat() if analysis.created_at else None,
+        # Owner (or admin) can cancel/delete from the detail page; system rows
+        # are read-only for regular users — mirrors can_manage in /analysis/jobs.
+        can_manage=is_admin_actor(actor) or (
+            analysis.user_id is not None and analysis.user_id == actor.get("user_id")
+        ),
     )

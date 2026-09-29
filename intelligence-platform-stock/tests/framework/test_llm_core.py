@@ -188,6 +188,139 @@ def test_engine_is_domain_neutral():
     assert "candidate_summary" in h_res
 
 
+# ── LLMClient transient-error retry ────────────────────────────────
+
+
+class _FlakyCompletions:
+    """Fails N times with the given exception factory, then succeeds."""
+
+    def __init__(self, failures, exc_factory, content='{"summary": "recovered"}'):
+        self.failures = failures
+        self.exc_factory = exc_factory
+        self.good = _FakeCompletions(content, 7)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.exc_factory()
+        return await self.good.create(**kwargs)
+
+
+def _overloaded_503(retry_after=None):
+    """Build the exact 503 from production: 'high demand', status UNAVAILABLE."""
+    import httpx
+    import openai
+
+    headers = {"retry-after": str(retry_after)} if retry_after is not None else {}
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        headers=headers,
+        json={"error": {"code": 503, "message": "This model is currently experiencing high demand.", "status": "UNAVAILABLE"}},
+    )
+    return openai.InternalServerError("Error code: 503", response=response, body=None)
+
+
+def _auth_error():
+    import httpx
+    import openai
+
+    response = httpx.Response(
+        401,
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        json={"error": {"message": "bad key"}},
+    )
+    return openai.AuthenticationError("Error code: 401", response=response, body=None)
+
+
+def _retry_client(completions, max_attempts=3):
+    from app.intelligence.llm.client import LLMClient as _Client
+
+    client = _Client(
+        api_key="test-key",
+        model="test-model",
+        max_attempts=max_attempts,
+        retry_base_delay=0.01,
+        retry_max_delay=0.02,
+    )
+    client._client = _FakeSDK(completions)  # inject fake transport
+    return client
+
+
+def test_classify_llm_error_transient_vs_permanent():
+    from app.intelligence.llm.client import classify_llm_error
+
+    # Production 503 with no Retry-After → transient, no hint.
+    assert classify_llm_error(_overloaded_503()) == -1.0
+    # Server-supplied hint is honored.
+    assert classify_llm_error(_overloaded_503(retry_after=7)) == 7.0
+    # Non-transient / non-provider errors are never retried.
+    assert classify_llm_error(_auth_error()) is None
+    assert classify_llm_error(ValueError("not a provider error")) is None
+
+
+def test_chat_json_retries_transient_503_and_recovers():
+    comps = _FlakyCompletions(failures=2, exc_factory=_overloaded_503)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    result, tokens = asyncio.run(run())
+    assert result == {"summary": "recovered"}
+    assert tokens == 7
+    assert comps.calls == 3  # failed twice, succeeded on the third attempt
+
+
+def test_chat_json_gives_up_after_max_attempts():
+    comps = _FlakyCompletions(failures=99, exc_factory=_overloaded_503)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001 — assert the SDK error propagates
+        raised = exc
+    assert raised is not None
+    assert "503" in str(raised)
+    assert comps.calls == 3  # exactly max_attempts, no more
+
+
+def test_chat_json_does_not_retry_non_transient_errors():
+    comps = _FlakyCompletions(failures=1, exc_factory=_auth_error)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+    assert raised is not None
+    assert comps.calls == 1  # auth errors raise immediately — retrying can't help
+
+
+def test_llm_service_passes_retry_settings_to_engine():
+    """LLMService wires the domain retry settings into the framework engine."""
+    from app.intelligence.llm.client import LLMClient as _Client
+    from app.domains.stock.config import get_stock_config
+    from app.domains.stock.scoring.llm import LLMService
+
+    cfg = get_stock_config()
+    service = LLMService(api_key="k", model="m", provider="test")
+    engine = service._get_engine()
+    assert isinstance(engine, _Client)
+    assert engine.max_attempts == cfg.LLM_MAX_ATTEMPTS
+    assert engine.retry_base_delay == cfg.LLM_RETRY_BASE_DELAY
+    assert engine.retry_max_delay == cfg.LLM_RETRY_MAX_DELAY
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

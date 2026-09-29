@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getMarketOverview, getAlerts, getMarketIndices, getTopMovers } from '../services/api';
 import { useToast } from '../components/Toast';
 import { REFRESH_DASHBOARD_MS } from '../config';
@@ -208,18 +208,18 @@ export default function Dashboard() {
           <div className="card">
             <h3 className="text-lg font-semibold text-on-surface mb-3">Quick Links</h3>
             <div className="grid grid-cols-2 gap-2">
-              <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" href="/analysis">
+              <Link className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" to="/analysis">
                 <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">monitoring</span>
                 <span className="text-xs text-on-surface">Deep Analysis</span>
-              </a>
-              <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" href="/opportunities">
+              </Link>
+              <Link className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center" to="/opportunities">
                 <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">insights</span>
                 <span className="text-xs text-on-surface">Opportunities</span>
-              </a>
-              <a className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center col-span-2" href="/news">
+              </Link>
+              <Link className="p-3 bg-surface-variant border border-outline-variant rounded flex flex-col items-center justify-center gap-2 hover:bg-surface-bright hover:border-secondary transition-colors group text-center col-span-2" to="/news">
                 <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">newspaper</span>
                 <span className="text-xs text-on-surface">News Aggregator</span>
-              </a>
+              </Link>
             </div>
           </div>
         </div>

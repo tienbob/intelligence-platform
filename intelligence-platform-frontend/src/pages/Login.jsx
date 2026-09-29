@@ -1,16 +1,27 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../services/auth';
 import { useToast } from '../components/Toast';
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const toast = useToast();
   const { login } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Show a friendly note when the API layer redirected here after a session
+  // expired (?expired=1), then clear the flag from the URL.
+  const [sessionExpired] = useState(() => searchParams.has('expired'));
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (searchParams.has('expired')) {
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -20,7 +31,8 @@ export default function Login() {
     try {
       await login(email, password);
       toast('Logged in successfully', 'success');
-      navigate('/dashboard');
+      // Return the user to the page they were bounced from, if any.
+      navigate(location.state?.from || '/dashboard', { replace: true });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -38,6 +50,12 @@ export default function Login() {
             Access your Market Intelligence dashboard
           </p>
         </div>
+
+        {sessionExpired && (
+          <div role="status" className="mb-4 p-3 rounded border border-secondary-container/50 bg-secondary-container/10 text-on-surface text-sm">
+            Your session expired — please sign in again.
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 rounded border bg-error-container/20 border-error-container/50 text-error text-sm">

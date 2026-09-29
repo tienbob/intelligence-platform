@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../services/auth';
+import { getAlerts } from '../services/api';
 import { useToast } from './Toast';
 
 export default function TopNav() {
@@ -8,6 +9,7 @@ export default function TopNav() {
   const toast = useToast();
   const { user, isAuthenticated, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [hasUnread, setHasUnread] = useState(false);
   const menuRef = useRef(null);
 
   // Close menu on outside click
@@ -20,6 +22,24 @@ export default function TopNav() {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
+
+  // Real unread indicator: only show the notification dot when the user
+  // actually has unread alerts (instead of a permanent fake dot).
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setHasUnread(false);
+      return undefined;
+    }
+    let cancelled = false;
+    getAlerts({ unread_only: true, limit: 1 })
+      .then((d) => {
+        if (!cancelled) setHasUnread((d?.alerts?.length || 0) > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setHasUnread(false);
+      });
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
 
   return (
     <header className="hidden md:flex justify-between items-center w-full px-container-margin h-16 z-50 bg-surface-container-low border-b border-outline-variant fixed top-0">
@@ -58,7 +78,9 @@ export default function TopNav() {
           onClick={() => navigate('/alerts')}
         >
           <span className="material-symbols-outlined">notifications</span>
-          <span className="absolute top-1 right-1 w-2 h-2 bg-error rounded-full border border-surface-container-low" />
+          {hasUnread && (
+            <span className="absolute top-1 right-1 w-2 h-2 bg-error rounded-full border border-surface-container-low" />
+          )}
         </button>
 
         {isAuthenticated ? (

@@ -52,7 +52,7 @@ const statusConfig = {
 
 export default function StatusChip({ status, label, size = 'sm' }) {
   const config = statusConfig[status?.toLowerCase()] || statusConfig.neutral;
-  const displayLabel = label || status;
+  const displayLabel = label || status?.replaceAll('_', ' ');
 
   return (
     <span

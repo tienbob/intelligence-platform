@@ -91,6 +91,7 @@ def test_manifest_prompts_registry_loads_templates():
 # ── Scoring strategy delegation (fakes, no DB) ───────────────────
 
 class _FakeScoreRow:
+    id = 101
     overall_score = 62.4
     confidence = 0.83
     recommendation = "HOLD"
@@ -165,6 +166,7 @@ def test_scoring_strategy_maps_engine_row_faithfully(monkeypatch):
         "fundamental", "valuation", "growth", "technical",
         "sentiment", "catalyst", "risk",
     }
+    assert result["metadata"]["score_id"] == 101
     assert result["scoring_model"] == "weighted_v1"
     assert result["scoring_version"] == "1.0"
 

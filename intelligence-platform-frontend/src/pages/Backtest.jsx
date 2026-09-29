@@ -48,14 +48,14 @@ export default function Backtest() {
       setRuns(runsResult.value?.runs || []);
     } else {
       setRuns([]);
-      toast.error('Failed to load backtest runs.');
+      toast('Failed to load backtest runs.', 'error');
     }
 
     if (snapshotsResult.status === 'fulfilled') {
       setSnapshots(snapshotsResult.value?.snapshots || []);
     } else {
       setSnapshots([]);
-      toast.error('Failed to load snapshots.');
+      toast('Failed to load snapshots.', 'error');
     }
 
     setLoading(false);
@@ -70,7 +70,7 @@ export default function Backtest() {
       setSelectedRun(detail);
       setTrades(detail?.trades || []);
     } catch (err) {
-      toast.error(err.message || 'Failed to load run details.');
+      toast(err.message || 'Failed to load run details.', 'error');
     }
   }
 
@@ -97,7 +97,7 @@ export default function Backtest() {
       setRuns(r?.runs || []);
     } catch (err) {
       setCreateResult({ success: false, message: err.message });
-      toast.error(err.message || 'Failed to create backtest run.');
+      toast(err.message || 'Failed to create backtest run.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -324,7 +324,12 @@ export default function Backtest() {
               </span>
             </h3>
           </div>
-          {runs.length > 0 ? (
+          {loading ? (
+            <div className="py-12 text-center text-on-surface-variant">
+              <span className="material-symbols-outlined text-4xl mb-2 block animate-pulse">history</span>
+              <p>Loading backtest runs…</p>
+            </div>
+          ) : runs.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-sm data-font">
                 <thead>
