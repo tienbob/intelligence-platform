@@ -4,8 +4,11 @@ import { getNews, getMarketOverview, getEvents } from '../services/api';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
-// Visible news cards before the Correlated News feed starts scrolling.
-const NEWS_VIEW_LIMIT = 10;
+// Visible feed cards before Correlated News / Event Timeline start
+// scrolling. Both feeds share the same cap so the columns stay visually
+// aligned.
+const FEED_VIEW_LIMIT = 10;
+const FEED_MAX_HEIGHT = 'max-h-[68rem]';
 
 // Map UI labels to actual API event type codes.
 const EVENT_TYPE_OPTIONS = {
@@ -173,10 +176,12 @@ export default function News() {
                 <span className="material-symbols-outlined text-secondary">timeline</span>
                 Event Timeline
               </h2>
+              <span className="text-xs text-on-surface-variant data-font">{events.length} {events.length === 1 ? 'event' : 'events'}</span>
             </div>
-            <div className="relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2">
+            {/* Same cap as Correlated News: ~10 cards visible, scrolls for the rest. */}
+            <div className={`relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2 ${events.length > FEED_VIEW_LIMIT ? FEED_MAX_HEIGHT : ''}`}>
               {events.length > 0 ? (
-                events.slice(0, 8).map((event) => (
+                events.map((event) => (
                  <div key={event.id} className="relative group cursor-pointer">
                     <div className={`absolute -left-[29px] top-1 w-3 h-3 rounded-full ring-4 ring-surface-container-low ${event.impact === 'positive' ? 'bg-secondary' : event.impact === 'negative' ? 'bg-error' : 'bg-surface-variant border border-outline-variant'}`} />
                     <div className="bg-surface-container-high border border-outline-variant rounded p-3 group-hover:border-secondary transition-colors">
@@ -228,7 +233,7 @@ export default function News() {
               <span className="text-xs text-on-surface-variant data-font">{news.length} {news.length === 1 ? 'article' : 'articles'}</span>
             </div>
             {/* ~10 cards visible; scrolls only when there are more. */}
-            <div className={`space-y-3 flex-1 overflow-y-auto ${news.length > NEWS_VIEW_LIMIT ? 'max-h-[68rem] pr-1' : ''}`}>
+            <div className={`space-y-3 flex-1 overflow-y-auto ${news.length > FEED_VIEW_LIMIT ? `${FEED_MAX_HEIGHT} pr-1` : ''}`}>
               {news.length > 0 ? (
                 news.map((article) => (
                   <div
