@@ -1,294 +1,198 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { createCompanyAnalysis, getAnalysisJobs, deleteAnalysis } from "../services/api";
-import { useToast } from "../components/Toast";
-import StatusChip from "../components/StatusChip";
-import ProgressBar from "../components/ProgressBar";
-import { REFRESH_ANALYSIS_JOBS_MS } from "../config";
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { createCompanyAnalysis, getAnalysisJobs, deleteAnalysis, cancelAnalysis } from '../services/api';
+import { useToast } from '../components/Toast';
+import ConfirmDialog from '../components/ConfirmDialog';
+import StatusChip from '../components/StatusChip';
+import MetricTile from '../components/MetricTile';
+import { REFRESH_ANALYSIS_JOBS_MS } from '../config';
+
+const PAGE_SIZE = 20;
+const ACTIVE = ['queued', 'collecting_data', 'calculating_metrics', 'retrieving_context', 'llm_analysis', 'risk_analysis', 'running', 'processing'];
+const SOURCES = ['news', 'fundamentals', 'technical', 'macro'];
 
 export default function Analysis() {
   const toast = useToast();
-  const navigate = useNavigate();
-  const [ticker, setTicker] = useState("");
-  const [timeHorizon, setTimeHorizon] = useState("medium_term");
-  const [includeNews, setIncludeNews] = useState(true);
-  const [includeFundamentals, setIncludeFundamentals] = useState(true);
-  const [includeTechnical, setIncludeTechnical] = useState(true);
-  const [includeMacro, setIncludeMacro] = useState(true);
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
+  const [version, setVersion] = useState(0);
+  const [state, setState] = useState(null);
+  const [ticker, setTicker] = useState('');
+  const [sources, setSources] = useState(Object.fromEntries(SOURCES.map(key => [key, true])));
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState(null);
-  const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [formError, setFormError] = useState('');
+  const [created, setCreated] = useState(null);
+  const [pending, setPending] = useState({});
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const current = state?.page === page ? state : null;
+  const data = current?.data;
+  const jobs = data?.jobs || [];
+  const total = data?.total || 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const counts = data?.status_counts || {};
+  const supportsInclusions = data?.supports_inclusions !== false;
 
-  async function loadJobs() {
-    try {
-      const data = await getAnalysisJobs({ limit: 20 });
-      setJobs(data?.jobs || []);
-    } catch {
-      // API not available
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { loadJobs(); }, []);
-
-  // Auto-refresh the job list while jobs are active (running/queued), so the
-  // UI updates when an AI analysis finishes without a manual refresh.
   useEffect(() => {
-    if (REFRESH_ANALYSIS_JOBS_MS <= 0) return;
-    const interval = setInterval(() => {
-      loadJobs();
-    }, REFRESH_ANALYSIS_JOBS_MS);
-    return () => clearInterval(interval);
-  }, []);
+    let stopped = false;
+    let timer;
+    async function load() {
+      try {
+        const data = await getAnalysisJobs({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+        if (!stopped) setState({ page, data, error: null });
+      } catch (error) {
+        if (!stopped) setState(previous => ({ page, data: previous?.page === page ? previous.data : null, error: error.message }));
+      }
+      if (!stopped && REFRESH_ANALYSIS_JOBS_MS > 0) timer = setTimeout(load, REFRESH_ANALYSIS_JOBS_MS);
+    }
+    load();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [page, version]);
 
-  const activeStatuses = ["queued", "collecting_data", "calculating_metrics", "retrieving_context", "llm_analysis", "risk_analysis", "running", "processing"];
-
-  async function handleCancel(analysisId) {
+  async function act(job, action) {
+    if (pending[job.analysis_id]) return;
+    // Destructive deletes go through the styled ConfirmDialog (L3) instead of
+    // the native window.confirm.
+    if (action === 'delete') {
+      setConfirmDelete(job);
+      return;
+    }
+    setPending(previous => ({ ...previous, [job.analysis_id]: true }));
     try {
-      await deleteAnalysis(analysisId);
-      toast("Analysis job cancelled", "success");
-      await loadJobs();
-    } catch (err) {
-      toast(err.message || "Failed to cancel analysis", "error");
+      const result = await cancelAnalysis(job.analysis_id);
+      toast(`Analysis ${result.status}`, 'success');
+      setVersion(value => value + 1);
+    } catch (error) {
+      toast(error.message || 'Action failed. Try again.', 'error');
+    } finally {
+      setPending(previous => ({ ...previous, [job.analysis_id]: false }));
     }
   }
 
-  async function handleDelete(analysisId) {
+  async function confirmDeleteAnalysis() {
+    const job = confirmDelete;
+    if (!job || pending[job.analysis_id]) return;
+    setPending(previous => ({ ...previous, [job.analysis_id]: true }));
     try {
-      await deleteAnalysis(analysisId);
-      toast("Analysis record deleted", "success");
-      await loadJobs();
-    } catch (err) {
-      toast(err.message || "Failed to delete analysis", "error");
+      await deleteAnalysis(job.analysis_id);
+      toast('Analysis deleted', 'success');
+      setConfirmDelete(null);
+      if (jobs.length === 1 && page > 1) setParams({ page: String(page - 1) });
+      setVersion(value => value + 1);
+    } catch (error) {
+      toast(error.message || 'Action failed. Try again.', 'error');
+    } finally {
+      setPending(previous => ({ ...previous, [job.analysis_id]: false }));
     }
   }
 
-  async function handleCreate() {
-    if (!ticker.trim()) return;
+  async function create(event) {
+    event.preventDefault();
+    if (submitting) return;
     setSubmitting(true);
+    setFormError('');
     try {
-      const data = await createCompanyAnalysis({
+      const result = await createCompanyAnalysis({
         ticker: ticker.trim().toUpperCase(),
-        time_horizon: timeHorizon,
-        include_news: includeNews,
-        include_fundamentals: includeFundamentals,
-        include_technical: includeTechnical,
-        include_macro: includeMacro,
+        ...Object.fromEntries(SOURCES.map(key => [`include_${key}`, supportsInclusions ? sources[key] : true])),
       });
-      setResult(data);
-      toast(`Analysis queued: ${data.analysis_id?.slice(0, 8)}...`, "success");
-      setTicker("");
-      // Refresh job list
-      await loadJobs();
-    } catch (err) {
-      // Surface the actual backend error (e.g. "Company APPL not found")
-      // instead of a generic "backend unavailable" message.
-      setResult({ status: "error", message: err.message || "Analysis failed to start" });
+      setCreated(result);
+      setTicker('');
+      setParams({ page: '1' });
+      setVersion(value => value + 1);
+      toast('Analysis queued', 'success');
+    } catch (error) {
+      setFormError(error.message || 'Could not create analysis. Try again.');
     } finally {
       setSubmitting(false);
     }
   }
 
-  const activeCount = jobs.filter(j => activeStatuses.includes(j.status)).length;
-  const completedCount = jobs.filter(j => j.status === "completed").length;
-  const failedCount = jobs.filter(j => j.status === "failed").length;
-
   return (
     <div>
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6">
         <div>
-          <h1 className="text-4xl font-bold text-on-surface flex items-center gap-2">
-            <span className="material-symbols-outlined text-secondary-container text-3xl">memory</span>
-            AI Analysis Jobs
+          <h1 className="text-4xl font-bold text-on-surface flex items-center gap-3">
+            <span aria-hidden="true" className="material-symbols-outlined text-secondary text-3xl">memory</span>
+            AI Analysis
           </h1>
-          <p className="text-sm text-on-surface-variant mt-1">
-            Manage and monitor parallel execution of financial intelligence models.
-          </p>
+          <p className="text-sm text-on-surface-variant mt-2">Company research, investment signals, and the evidence behind them.</p>
         </div>
-        <p className="text-sm text-on-surface-variant mt-1">{REFRESH_ANALYSIS_JOBS_MS > 0 ? `Auto-refreshes every ${REFRESH_ANALYSIS_JOBS_MS / 1000}s.` : ''}</p>
+        <button className="btn-secondary btn-sm inline-flex items-center justify-center gap-2 self-start sm:self-auto" onClick={() => setVersion(value => value + 1)}>
+          <span aria-hidden="true" className="material-symbols-outlined text-base">refresh</span> Refresh
+        </button>
       </div>
-
-      {result && (
-        <div className={`mb-6 p-4 rounded border text-sm ${result.status === "error" ? "bg-error-container/20 border-error-container/50 text-error" : "bg-tertiary-fixed/10 border-tertiary-fixed/30 text-tertiary"}`}>
-          {result.analysis_id ? `Analysis created: ${result.analysis_id} (${result.status})` : result.message || "Analysis submitted"}
-        </div>
-      )}
-
-      {/* Metrics Row — Real Data */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-gutter mb-6">
-        <div className="card flex flex-col items-center justify-center py-6">
-          <span className="material-symbols-outlined text-3xl text-tertiary mb-2">rocket_launch</span>
-          <span className="text-xs text-on-surface-variant">Active/Queued</span>
-          <span className="text-2xl font-bold text-on-surface data-font mt-1">{activeCount || '—'}</span>
-        </div>
-        <div className="card flex flex-col items-center justify-center py-6">
-          <span className="material-symbols-outlined text-3xl text-on-surface-variant mb-2">hourglass_empty</span>
-          <span className="text-xs text-on-surface-variant">Total Jobs</span>
-          <span className="text-2xl font-bold text-on-surface data-font mt-1">{jobs.length || '—'}</span>
-        </div>
-        <div className="card flex flex-col items-center justify-center py-6">
-          <span className="material-symbols-outlined text-3xl text-tertiary mb-2">task_alt</span>
-          <span className="text-xs text-on-surface-variant">Completed</span>
-          <span className="text-2xl font-bold text-on-surface data-font mt-1">{completedCount || '—'}</span>
-        </div>
-        <div className="card flex flex-col items-center justify-center py-6">
-          <span className="material-symbols-outlined text-3xl text-error mb-2">error</span>
-          <span className="text-xs text-on-surface-variant">Failed</span>
-          <span className="text-2xl font-bold text-on-surface data-font mt-1">{failedCount || '—'}</span>
-        </div>
+      {created && <div role="status" className="flex flex-wrap items-center justify-between gap-3 p-4 mb-6 rounded-lg border border-tertiary/30 bg-tertiary/5 text-sm">
+        <span className="flex items-center gap-2"><span aria-hidden="true" className="material-symbols-outlined text-tertiary text-lg">check_circle</span> Your analysis is queued.</span>
+        <Link className="text-secondary hover:underline inline-flex items-center gap-1" to={`/analysis/${created.analysis_id}`}>View analysis <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_forward</span></Link>
+      </div>}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-6">
+        {[
+          ['Total Analyses', total, 'analytics', 'on-surface-variant'],
+          ['In Progress', ACTIVE.reduce((sum, key) => sum + (counts[key] || 0), 0), 'autorenew', 'secondary'],
+          ['Completed', counts.completed || 0, 'task_alt', 'tertiary'],
+          ['Failed', counts.failed || 0, 'error_outline', 'error'],
+        ].map(([label, value, icon, color]) => <MetricTile key={label} label={label} value={data ? value : '—'} icon={icon} color={color} />)}
       </div>
-
-      <div className="grid grid-cols-12 gap-gutter">
-        {/* Execution Queue */}
-        <div className="col-span-12 lg:col-span-8 card flex flex-col overflow-hidden !p-0 h-[600px]">
-          <div className="px-4 py-3 border-b border-outline-variant flex justify-between items-center bg-surface-container-lowest">
-            <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
-              <span className="material-symbols-outlined text-on-surface-variant">list_alt</span>
-              Execution Queue
-            </h2>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-gutter items-start">
+        <section className="card xl:col-span-4 xl:order-2 !p-0 overflow-hidden">
+          <div className="p-5 border-b border-outline-variant/60 bg-surface-container">
+            <div className="flex items-center gap-2 mb-2"><span aria-hidden="true" className="material-symbols-outlined text-secondary text-xl">add_chart</span><h2 className="text-lg font-semibold">New Analysis</h2></div>
+            <p className="text-xs leading-relaxed text-on-surface-variant">Choose a company and the data to include in your research.</p>
           </div>
-          <div className="flex-1 overflow-auto">
-            {jobs.length > 0 ? (
-              <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 bg-surface-container-highest border-b border-outline-variant z-10 shadow-sm">
-                  <tr>
-                    <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">JOB ID</th>
-                    <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">TICKER</th>
-                    <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">STATUS</th>
-                    <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">SCORE</th>
-                    <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold text-right">ACTIONS</th>
-                  </tr>
-                </thead>
-                <tbody className="text-sm data-font divide-y divide-surface-variant">
-                  {jobs.map((job, i) => (
-                    <tr
-                      key={job.id}
-                      onClick={() => navigate(`/analysis/${job.analysis_id}`)}
-                      className={`cursor-pointer hover:bg-surface-variant/50 transition-colors group ${i % 2 === 0 ? "bg-surface-dim/30" : ""} ${job.status === "completed" ? "border-l-2 border-l-tertiary" : ""} ${job.status === "failed" ? "border-l-2 border-l-error" : ""}`}
-                    >
-                      <td className="py-3 px-4 text-on-surface-variant text-xs">{job.analysis_id?.slice(0, 12)}...</td>
-                      <td className="py-3 px-4 font-bold">{job.ticker || '—'}</td>
-                      <td className="py-3 px-4"><StatusChip status={job.status} /></td>
-                      <td className="py-3 px-4">
-                        {job.investment_score != null ? (
-                          <ProgressBar value={job.investment_score} max={100} color={job.investment_score > 60 ? 'tertiary' : job.investment_score > 30 ? 'secondary' : 'error'} showLabel={false} />
-                        ) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <span className="text-on-surface-variant text-xs">
-                            {job.created_at ? new Date(job.created_at).toLocaleString() : '—'}
-                          </span>
-                          {activeStatuses.includes(job.status) ? (
-                            <button
-                              className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 bg-surface-container-highest border border-outline-variant hover:border-warning hover:text-warning text-on-surface-variant rounded text-xs"
-                              onClick={(e) => { e.stopPropagation(); handleCancel(job.analysis_id); }}
-                              title="Cancel this analysis job"
-                            >
-                              <span className="material-symbols-outlined text-sm">cancel</span>
-                            </button>
-                          ) : (
-                            <button
-                              className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 bg-surface-container-highest border border-outline-variant hover:border-error hover:text-error text-on-surface-variant rounded text-xs"
-                              onClick={(e) => { e.stopPropagation(); handleDelete(job.analysis_id); }}
-                              title="Delete this analysis record"
-                            >
-                              <span className="material-symbols-outlined text-sm">delete</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-16 text-on-surface-variant">
-                <span className="material-symbols-outlined text-5xl mb-4">list_alt</span>
-                <p className="text-sm">No analysis jobs yet.</p>
-                <p className="text-xs mt-1">Create one using the form on the right.</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Side Panel */}
-        <div className="col-span-12 lg:col-span-4 flex flex-col gap-gutter">
-          {/* Deploy New Agent */}
-          <div className="card relative overflow-hidden group">
-            <div className="absolute -right-10 -top-10 w-32 h-32 bg-secondary-container/10 rounded-full blur-2xl group-hover:bg-secondary-container/20 transition-all" />
-            <h3 className="text-lg font-semibold text-on-surface mb-2 relative z-10">Deploy New Agent</h3>
-            <p className="text-xs text-on-surface-variant mb-4 relative z-10">
-              Initialize a bespoke ML pipeline for targeted asset analysis.
-            </p>
-            <div className="space-y-3 relative z-10">
-              <div>
-                <label className="block text-xs text-on-surface-variant mb-1 uppercase tracking-wider data-font">Target Entity</label>
-                <input className="input-field uppercase data-font" placeholder="Ticker (e.g. AAPL)" type="text" value={ticker} onChange={(e) => setTicker(e.target.value)} />
-              </div>
-              <div>
-                <label className="block text-xs text-on-surface-variant mb-1 uppercase tracking-wider data-font">Time Horizon</label>
-                <select className="select-field" value={timeHorizon} onChange={(e) => setTimeHorizon(e.target.value)}>
-                  <option value="short_term">Short Term</option>
-                  <option value="medium_term">Medium Term</option>
-                  <option value="long_term">Long Term</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-on-surface-variant mb-1 uppercase tracking-wider data-font">Data Inclusions</label>
-                <div className="space-y-1.5">
-                  {[
-                    { key: 'news', label: 'News', set: setIncludeNews, val: includeNews },
-                    { key: 'fundamentals', label: 'Fundamentals', set: setIncludeFundamentals, val: includeFundamentals },
-                    { key: 'technical', label: 'Technical', set: setIncludeTechnical, val: includeTechnical },
-                    { key: 'macro', label: 'Macro', set: setIncludeMacro, val: includeMacro },
-                  ].map((opt) => (
-                    <label key={opt.key} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="rounded-sm border-outline-variant text-secondary-container focus:ring-secondary"
-                        checked={opt.val}
-                        onChange={(e) => opt.set(e.target.checked)}
-                      />
-                      <span className="text-sm text-on-surface">{opt.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <button className="w-full py-2 bg-primary-container border border-secondary-container/50 text-secondary-fixed hover:bg-secondary-container/10 text-xs font-semibold tracking-wide rounded transition-colors mt-2 uppercase flex items-center justify-center gap-2 data-font" onClick={handleCreate} disabled={submitting}>
-                <span className="material-symbols-outlined text-sm">bolt</span>
-                {submitting ? "Initializing..." : "Initialize Run"}
-              </button>
+          <form onSubmit={create} className="p-5 space-y-5">
+            <div>
+              <label htmlFor="analysis-ticker" className="block text-xs uppercase tracking-wider data-font text-on-surface-variant mb-2">Company ticker</label>
+              <input id="analysis-ticker" name="ticker" className="input-field uppercase data-font !py-3" placeholder="e.g. AAPL" value={ticker} onChange={event => setTicker(event.target.value)} required pattern=".*\S.*" autoComplete="off" spellCheck={false} disabled={submitting} />
             </div>
+            <fieldset disabled={submitting || !data || !supportsInclusions} className="grid grid-cols-2 gap-2 disabled:opacity-60">
+              <legend className="text-xs uppercase tracking-wider data-font text-on-surface-variant mb-3">Research sources</legend>
+              {SOURCES.map(key => <label key={key} className="flex items-center gap-2.5 capitalize text-sm p-3 bg-surface-container border border-outline-variant/50 rounded hover:border-secondary/60 transition-colors cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-secondary"><input name={`include_${key}`} type="checkbox" className="accent-secondary-container w-3.5 h-3.5" checked={supportsInclusions ? sources[key] : true} onChange={event => setSources(previous => ({ ...previous, [key]: event.target.checked }))} />{key}</label>)}
+            </fieldset>
+            {!supportsInclusions && <p className="text-sm text-on-surface-variant">This analysis mode uses all data sources.</p>}
+            {formError && <p role="alert" className="text-error">{formError}</p>}
+            <button className="btn-primary w-full text-sm inline-flex items-center justify-center gap-2 !py-3" disabled={submitting || !data} type="submit"><span aria-hidden="true" className="material-symbols-outlined text-lg">{submitting ? 'hourglass_top' : 'play_arrow'}</span>{submitting ? 'Creating analysis…' : 'Run Analysis'}</button>
+          </form>
+          <div className="px-5 py-4 border-t border-outline-variant/60 space-y-3 bg-surface-container-lowest/40">
+            <Link className="flex items-center justify-between text-xs text-on-surface-variant hover:text-secondary transition-colors" to="/opportunities">Explore investment opportunities <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_outward</span></Link>
+            <Link className="flex items-center justify-between text-xs text-on-surface-variant hover:text-secondary transition-colors" to="/backtest">Evaluate a strategy <span aria-hidden="true" className="material-symbols-outlined text-base">arrow_outward</span></Link>
           </div>
-
-          {/* Investment Opportunities Summary */}
-          <div className="card">
-            <h3 className="text-lg font-semibold text-on-surface mb-3 flex items-center gap-2">
-              <span className="material-symbols-outlined text-tertiary">insights</span>
-              Quick Actions
-            </h3>
-            <div className="space-y-2">
-              <a href="/portfolio" className="block p-3 bg-surface-variant border border-outline-variant rounded hover:bg-surface-bright hover:border-secondary transition-colors group">
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">pie_chart</span>
-                  <span className="text-sm text-on-surface">View Investment Opportunities</span>
-                </div>
-                <p className="text-xs text-on-surface-variant mt-1">See scored recommendations and optimize portfolio allocation.</p>
-              </a>
-              <a href="/backtest" className="block p-3 bg-surface-variant border border-outline-variant rounded hover:bg-surface-bright hover:border-secondary transition-colors group">
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-on-surface-variant group-hover:text-secondary">history</span>
-                  <span className="text-sm text-on-surface">Run Backtest</span>
-                </div>
-                <p className="text-xs text-on-surface-variant mt-1">Evaluate strategy performance against historical data.</p>
-              </a>
-            </div>
+        </section>
+        <section className="card xl:col-span-8 min-w-0 !p-0 overflow-hidden">
+          <div className="px-5 py-4 border-b border-outline-variant/60 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold flex items-center gap-2"><span aria-hidden="true" className="material-symbols-outlined text-on-surface-variant text-xl">history</span> Analysis History</h2>
+            {data && <span className="text-xs data-font text-on-surface-variant">{total} {total === 1 ? 'run' : 'runs'}</span>}
           </div>
-        </div>
+          {!current && <p role="status" className="py-20 text-center text-sm text-on-surface-variant">Loading analyses…</p>}
+          {current?.error && <div role="alert" className="m-4 p-3 rounded border border-error/30 bg-error/5 text-sm text-error"><p>Could not refresh analyses: {current.error}</p><button className="btn-secondary mt-2" onClick={() => setVersion(value => value + 1)}>Retry</button></div>}
+          {data && !jobs.length && <div className="py-20 px-6 text-center"><span aria-hidden="true" className="material-symbols-outlined text-4xl text-secondary/60 mb-3">query_stats</span><p className="text-sm font-medium">{total ? 'No analyses on this page' : 'Your research starts here'}</p><p className="text-xs text-on-surface-variant mt-2">{total ? 'Use Previous to return to earlier pages.' : 'Choose a company to generate your first investment analysis.'}</p></div>}
+          {jobs.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left text-sm border-collapse">
+            <thead className="bg-surface-container-high/60"><tr>{['Company', 'Status', 'Score', 'Created', ''].map(label => <th key={label} scope="col" className="px-4 py-3 text-[10px] uppercase tracking-wider font-medium text-on-surface-variant">{label || <span className="sr-only">Actions</span>}</th>)}</tr></thead>
+            <tbody>{jobs.map(job => <tr key={job.analysis_id} className="border-t border-outline-variant/40 hover:bg-surface-container transition-colors">
+              <td className="px-4 py-4"><Link className="group block rounded focus-visible:outline-2 focus-visible:outline-secondary" to={`/analysis/${job.analysis_id}`}><span className="font-semibold data-font group-hover:text-secondary transition-colors">{job.ticker}</span><span className="block text-[10px] text-on-surface-variant/70 data-font mt-1">{job.analysis_id.slice(0, 8)}</span></Link></td>
+              <td className="px-4 py-4"><StatusChip status={job.status} /></td>
+              <td className="px-4 py-4 data-font font-semibold tabular-nums">{job.investment_score != null ? Math.round(job.investment_score) : '—'}</td>
+              <td className="px-4 py-4">{job.created_at ? <time dateTime={job.created_at} className="text-xs text-on-surface-variant whitespace-nowrap">{new Date(job.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}<span className="block text-[10px] data-font mt-1 opacity-70">{new Date(job.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span></time> : '—'}</td>
+              <td className="px-4 py-4">{job.can_manage ? <button className="text-xs text-on-surface-variant px-2 py-1.5 rounded border border-transparent hover:border-error/30 hover:bg-error/5 hover:text-error focus-visible:outline-2 focus-visible:outline-secondary disabled:opacity-40 disabled:cursor-wait transition-colors" disabled={pending[job.analysis_id]} onClick={() => act(job, ACTIVE.includes(job.status) ? 'cancel' : 'delete')}>{pending[job.analysis_id] ? 'Working…' : ACTIVE.includes(job.status) ? 'Cancel' : 'Delete'}</button> : <span className="text-[10px] text-on-surface-variant/70 whitespace-nowrap">Read only</span>}</td>
+            </tr>)}</tbody>
+          </table></div>}
+          <nav aria-label="Analysis pages" className="flex items-center justify-between gap-3 px-4 py-3 border-t border-outline-variant/60 bg-surface-container-lowest/40 text-xs text-on-surface-variant">
+            <button className="btn-secondary btn-sm disabled:opacity-30 disabled:cursor-not-allowed" disabled={page === 1} onClick={() => setParams({ page: String(page - 1) })}>Previous</button>
+            <span>Page {page}{data ? ` of ${pages}` : ''}</span>
+            <button className="btn-secondary btn-sm disabled:opacity-30 disabled:cursor-not-allowed" disabled={!data || page >= pages} onClick={() => setParams({ page: String(page + 1) })}>Next</button>
+          </nav>
+        </section>
       </div>
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete analysis"
+        message={`Permanently delete the ${confirmDelete?.ticker} analysis (${confirmDelete?.analysis_id})? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        busy={!!confirmDelete && !!pending[confirmDelete.analysis_id]}
+        onConfirm={confirmDeleteAnalysis}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }

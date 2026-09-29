@@ -269,6 +269,7 @@ class IntelligencePipeline:
                     # without re-running the context stage (PLAN.md: one
                     # persisted contract across engines).
                     "domain_snapshots": dict(context.domain_snapshots),
+                    "scoring_metadata": dict(score_result.get("metadata") or {}),
                 },
                 created_at=datetime.now(timezone.utc),
             )

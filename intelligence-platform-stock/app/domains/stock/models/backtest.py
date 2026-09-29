@@ -33,11 +33,16 @@ from app.domains.stock.models.base import TimestampMixin
 
 
 class BacktestRun(Base, TimestampMixin):
-    """A single backtest execution (Section 162)."""
+    """A single backtest execution (Section 162).
+
+    Ownership: ``user_id`` mirrors Rails ``users.id`` (no FK). ``NULL`` =
+    system/scheduler row, visible to everyone. Global market data stays shared.
+    """
 
     __tablename__ = "backtest_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     strategy: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     # strategy: score_threshold | momentum | equal_weight | portfolio_optimizer
@@ -71,7 +76,11 @@ class BacktestRun(Base, TimestampMixin):
 
 
 class BacktestSnapshot(Base, TimestampMixin):
-    """Point-in-time data snapshot for backtesting (Section 162)."""
+    """Point-in-time data snapshot for backtesting (Section 162).
+
+    Snapshots stay GLOBAL (shared market data) — no user scoping, so any
+    user's run may pin ``snapshot_id`` to any snapshot.
+    """
 
     __tablename__ = "backtest_snapshots"
 

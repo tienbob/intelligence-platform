@@ -1,34 +1,39 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getEvents } from '../services/api';
-import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
 export default function Events() {
-  const toast = useToast();
   const navigate = useNavigate();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [tickerFilter, setTickerFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
 
   useEffect(() => {
     async function load() {
       setLoading(true);
+      setError(null);
       try {
         const params = { limit: 100 };
         if (tickerFilter.trim()) params.ticker = tickerFilter.trim().toUpperCase();
         if (typeFilter) params.event_type = typeFilter;
         const data = await getEvents(params);
         setEvents(data?.events || []);
-      } catch {
-        // API not available
+      } catch (e) {
+        setError(e.message || 'Failed to load events');
       } finally {
         setLoading(false);
       }
     }
     load();
   }, [tickerFilter, typeFilter]);
+
+  function retryLoad() {
+    setTickerFilter('');
+    setTypeFilter('');
+  }
 
   const eventTypes = [...new Set(events.map((e) => e.event_type).filter(Boolean))];
 
@@ -57,6 +62,21 @@ export default function Events() {
         </div>
       </div>
 
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load events: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={retryLoad}>Retry</button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card py-20 text-center text-on-surface-variant">
+          <span className="material-symbols-outlined text-4xl mb-2 block animate-pulse">bolt</span>
+          <p className="text-sm">Loading events…</p>
+        </div>
+      )}
+
+      {!loading && (
       <div className="card overflow-hidden !p-0">
         <div className="p-widget-padding border-b border-outline-variant flex justify-between items-center bg-surface-container-low sticky top-0 z-10">
           <h3 className="text-lg font-semibold text-on-surface flex items-center gap-2">
@@ -121,18 +141,19 @@ export default function Events() {
                     </td>
                   </tr>
                 ))
-              ) : (
+              ) : !error ? (
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">bolt</span>
                     <p>No events detected yet. Events are generated from news and market data analysis.</p>
                   </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 }

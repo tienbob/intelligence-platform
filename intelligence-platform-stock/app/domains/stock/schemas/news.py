@@ -11,6 +11,8 @@ from pydantic import BaseModel
 
 
 class NewsResponse(BaseModel):
+    """Full news detail — only fields rendered by NewsDetail."""
+
     id: int
     source: str
     title: str
@@ -28,14 +30,28 @@ class NewsResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class NewsListItem(BaseModel):
+    """Lean list row — only fields rendered by the News feed."""
+
+    id: int
+    source: str
+    title: str
+    published_at: datetime
+    summary: Optional[str] = None
+    sentiment: Optional[float] = None
+
+    model_config = {"from_attributes": True}
+
+
 class NewsListResponse(BaseModel):
-    news: list[NewsResponse]
-    total: int
+    news: list[NewsListItem]
 
 
 class MarketEventResponse(BaseModel):
+    """Full event detail — only fields rendered by EventDetail/Event pages."""
+
     id: int
-    company_id: Optional[int] = None
+    ticker: Optional[str] = None
     event_type: str
     event_date: datetime
     impact: Optional[str] = None
@@ -48,6 +64,20 @@ class MarketEventResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EventListItem(BaseModel):
+    """Lean list row — only fields rendered by the Events table / timeline."""
+
+    id: int
+    ticker: Optional[str] = None
+    event_type: str
+    event_date: datetime
+    impact: Optional[str] = None
+    impact_score: Optional[float] = None
+    confidence: Optional[float] = None
+    description: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
 class EventListResponse(BaseModel):
-    events: list[MarketEventResponse]
-    total: int
+    events: list[EventListItem]

@@ -651,19 +651,70 @@ class FundamentalsIngestion:
             company = await self._get_company(ticker)
 
             if profile:
-                company.name = profile.get(
-                    "companyName",
-                    company.name,
+                company.name = (
+                    profile.get("companyName") or profile.get("name") or company.name
                 )
 
-                company.exchange = profile.get("exchange")
-                company.sector = profile.get("sector")
-                company.industry = profile.get("industry")
-                company.country = profile.get("country")
-                company.market_cap = profile.get("mktCap")
-                company.description = profile.get("description")
-                company.website = profile.get("website")
-                company.cik = profile.get("cik")
+                company.exchange = profile.get("exchange") or company.exchange
+                company.sector = profile.get("sector") or company.sector
+                company.industry = profile.get("industry") or company.industry
+                company.country = profile.get("country") or company.country
+                # FMP /stable/profile uses `marketCap` (older docs used `mktCap`).
+                company.market_cap = (
+                    profile.get("marketCap")
+                    or profile.get("mktCap")
+                    or company.market_cap
+                )
+                company.description = profile.get("description") or company.description
+                company.website = profile.get("website") or company.website
+                company.cik = profile.get("cik") or company.cik
+
+            # Fallback: Massive ticker details carry `market_cap` (and
+            # name/exchange) even when FMP profile is missing/blocked —
+            # notably for ETFs like SPY where FMP profile can be empty.
+            if not company.market_cap:
+                try:
+                    from app.domains.stock.providers import MassiveProvider
+
+                    massive = MassiveProvider()
+                    try:
+                        details = await massive.get_ticker_details(ticker)
+                    finally:
+                        await massive.close()
+                    if details:
+                        if not company.name or company.name == ticker.upper():
+                            company.name = details.get("name") or company.name
+                        if not company.exchange and details.get("primary_exchange"):
+                            company.exchange = details.get("primary_exchange")
+                        if not company.market_cap and details.get("market_cap"):
+                            try:
+                                company.market_cap = float(details.get("market_cap"))
+                            except (TypeError, ValueError):
+                                company.market_cap = None
+                        # Compute from price × weighted shares if still missing.
+                        if (
+                            not company.market_cap
+                            and details.get("weighted_shares_outstanding")
+                        ):
+                            try:
+                                shares = float(
+                                    details.get("weighted_shares_outstanding")
+                                )
+                                price_detail = details.get("price") or details.get(
+                                    "last_trade_price"
+                                )
+                                price_val = (
+                                    float(price_detail) if price_detail else None
+                                )
+                                if price_val:
+                                    company.market_cap = price_val * shares
+                            except (TypeError, ValueError):
+                                pass
+                except Exception:
+                    logger.warning(
+                        "Massive ticker-details fallback failed for %s",
+                        ticker,
+                    )
 
             await self.session.commit()
 

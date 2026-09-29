@@ -1,56 +1,101 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getAnalysis } from '../services/api';
+import { getAnalysis, createCompanyAnalysis, cancelAnalysis, deleteAnalysis } from '../services/api';
 import StatusChip from '../components/StatusChip';
 import MetricTile from '../components/MetricTile';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { useToast } from '../components/Toast';
 import { REFRESH_ANALYSIS_DETAIL_MS } from '../config';
 
 export default function AnalysisDetail() {
   const { analysisId } = useParams();
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [retryVersion, setRetryVersion] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState(null);
+  const [acting, setActing] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [result, setResult] = useState(null);
+  const current = result?.id === analysisId ? result : null;
+  const data = current?.data;
+  const error = current?.error;
+  const loading = !current;
 
   useEffect(() => {
     let cancelled = false;
+    let timeout;
 
     async function load() {
-      setLoading(true);
-      setError(null);
+      let terminal = false;
       try {
-        const result = await getAnalysis(analysisId);
+        const data = await getAnalysis(analysisId);
         if (cancelled) return;
-        setData(result);
+        setResult({ id: analysisId, data, error: null });
+        terminal = ['completed', 'failed', 'cancelled'].includes(data.status);
       } catch (e) {
         if (cancelled) return;
-        setError(e.message || 'Failed to load analysis');
-      } finally {
-        if (!cancelled) setLoading(false);
+        setResult((previous) => ({
+          id: analysisId,
+          data: previous?.id === analysisId ? previous.data : null,
+          error: e.message || 'Failed to load analysis',
+        }));
+      }
+      if (!cancelled && !terminal && REFRESH_ANALYSIS_DETAIL_MS > 0) {
+        timeout = setTimeout(load, REFRESH_ANALYSIS_DETAIL_MS);
       }
     }
 
     load();
-
-    // Auto-refresh while the job is still active (queued/running/llm_analysis)
-    // so the page updates when the AI analysis finishes. Stops polling once
-    // the analysis reaches a terminal status (completed/failed).
-    let interval = null;
-    if (REFRESH_ANALYSIS_DETAIL_MS > 0) {
-      interval = setInterval(() => {
-        if (data && ['completed', 'failed'].includes(data.status)) {
-          clearInterval(interval);
-          return;
-        }
-        load();
-      }, REFRESH_ANALYSIS_DETAIL_MS);
-    }
-
     return () => {
       cancelled = true;
-      if (interval) clearInterval(interval);
+      clearTimeout(timeout);
     };
-  }, [analysisId, data?.status]);
+  }, [analysisId, retryVersion]);
+
+  const toast = useToast();
+
+  async function retryAnalysis() {
+    if (retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const created = await createCompanyAnalysis({ ...(data.request_options || {}), ticker: data.ticker });
+      navigate(`/analysis/${created.analysis_id}`);
+    } catch (error) {
+      setRetryError(error.message || 'Could not retry. Please try again.');
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  async function handleCancelAnalysis() {
+    if (acting) return;
+    setActing(true);
+    try {
+      const result = await cancelAnalysis(analysisId);
+      toast(`Analysis ${result.status}`, 'success');
+      setRetryVersion(value => value + 1);
+    } catch (error) {
+      toast(error.message || 'Action failed. Try again.', 'error');
+    } finally {
+      setActing(false);
+    }
+  }
+
+  async function handleDeleteAnalysis() {
+    if (acting) return;
+    setConfirmDelete(false);
+    setActing(true);
+    try {
+      await deleteAnalysis(analysisId);
+      toast('Analysis deleted', 'success');
+      navigate('/analysis');
+    } catch (error) {
+      toast(error.message || 'Action failed. Try again.', 'error');
+    } finally {
+      setActing(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -60,7 +105,7 @@ export default function AnalysisDetail() {
     );
   }
 
-  if (error || !data) {
+  if (!data) {
     return (
       <div>
         <button
@@ -72,8 +117,9 @@ export default function AnalysisDetail() {
         </button>
         <div className="card py-16 text-center text-on-surface-variant">
           <span className="material-symbols-outlined text-5xl mb-4 block text-error">error</span>
-          <p className="text-lg mb-2">Analysis not found</p>
+          <p className="text-lg mb-2">Unable to load analysis</p>
           <p className="text-sm">{error || 'The requested analysis could not be loaded.'}</p>
+          <button className="btn-secondary mt-4" onClick={() => setRetryVersion(value => value + 1)}>Retry loading</button>
         </div>
       </div>
     );
@@ -82,9 +128,14 @@ export default function AnalysisDetail() {
   const analysis = data.analysis || {};
   const recommendation = data.recommendation;
   const cb = data.confidence_breakdown;
+  // Owner can cancel/delete from the detail page; system rows are read-only
+  // for regular users (mirrors can_manage on the jobs list).
+  const canManage = !!data.can_manage;
+  const isActive = !['completed', 'failed', 'cancelled'].includes(data.status);
 
   return (
     <div>
+      {error && <p role="status" className="text-error mb-4">Refresh failed: {error}. Reload to retry.</p>}
       <button
         onClick={() => navigate('/analysis')}
         className="text-on-surface-variant hover:text-on-surface transition-colors mb-4 flex items-center gap-1 text-sm"
@@ -92,6 +143,15 @@ export default function AnalysisDetail() {
         <span className="material-symbols-outlined text-sm">arrow_back</span>
         Back to AI Jobs
       </button>
+
+      {data.status === 'failed' && <section className="card mb-4" aria-label="Analysis failed">
+        <h2 className="text-lg font-semibold">Analysis failed</h2>
+        <p className="my-3">{data.failure_reason || 'This analysis did not finish. No failure details were recorded for this older job. You can start a new run.'}</p>
+        {retryError && <p role="alert" className="text-error mb-2">{retryError}</p>}
+        <button className="btn-primary" disabled={retrying || !data.ticker} onClick={retryAnalysis}>{retrying ? 'Starting new analysis…' : 'Retry as New Analysis'}</button>
+      </section>}
+      {data.status === 'cancelled' && <p role="status" className="card mb-4">This analysis was cancelled. Create a new analysis from the job list to run it again.</p>}
+      {!['completed', 'failed', 'cancelled'].includes(data.status) && <p role="status" className="card mb-4">Analysis in progress. Results will appear here when processing finishes.</p>}
 
       {/* Header */}
       <div className="card mb-6">
@@ -113,11 +173,32 @@ export default function AnalysisDetail() {
               </p>
             )}
           </div>
-          {recommendation && (
-            <div className="text-right">
+          <div className="flex flex-col items-start md:items-end gap-3">
+            {recommendation && (
               <StatusChip status={recommendation.recommendation} label={`Recommendation: ${recommendation.recommendation}`} />
-            </div>
-          )}
+            )}
+            {canManage && (
+              <div className="flex gap-2">
+                {isActive ? (
+                  <button
+                    className="btn-secondary btn-sm"
+                    disabled={acting}
+                    onClick={handleCancelAnalysis}
+                  >
+                    {acting ? 'Working…' : 'Cancel Analysis'}
+                  </button>
+                ) : (
+                  <button
+                    className="btn-secondary btn-sm text-error border-error/30 hover:bg-error/5"
+                    disabled={acting}
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -136,7 +217,7 @@ export default function AnalysisDetail() {
           color={data.risk_score > 60 ? 'error' : data.risk_score > 30 ? 'secondary' : 'tertiary'}
         />
         <MetricTile
-          label="Confidence"
+          label="Data Confidence"
           value={data.confidence != null ? `${(data.confidence * 100).toFixed(0)}%` : '—'}
           icon="verified"
           color="secondary"
@@ -158,7 +239,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-primary">summarize</span>
                 Summary
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.summary}</p>
+              <p className="text-sm text-on-surface leading-relaxed break-words">{analysis.summary}</p>
             </div>
           )}
 
@@ -168,7 +249,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-tertiary">lightbulb</span>
                 Investment Thesis
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.investment_thesis}</p>
+              <p className="text-sm text-on-surface leading-relaxed break-words">{analysis.investment_thesis}</p>
             </div>
           )}
 
@@ -178,7 +259,7 @@ export default function AnalysisDetail() {
                 <span className="material-symbols-outlined text-secondary">public</span>
                 Market Interpretation
               </h3>
-              <p className="text-sm text-on-surface leading-relaxed">{analysis.market_interpretation}</p>
+              <p className="text-sm text-on-surface leading-relaxed break-words">{analysis.market_interpretation}</p>
             </div>
           )}
 
@@ -194,7 +275,7 @@ export default function AnalysisDetail() {
                   {analysis.bull_case.map((point, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-tertiary text-base mt-0.5">check_circle</span>
-                      {point}
+                      <span className="break-words">{point}</span>
                     </li>
                   ))}
                 </ul>
@@ -210,7 +291,7 @@ export default function AnalysisDetail() {
                   {analysis.bear_case.map((point, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-error text-base mt-0.5">cancel</span>
-                      {point}
+                      <span className="break-words">{point}</span>
                     </li>
                   ))}
                 </ul>
@@ -230,7 +311,7 @@ export default function AnalysisDetail() {
                   {analysis.catalysts.map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-tertiary text-base mt-0.5">bolt</span>
-                      {item}
+                      <span className="break-words">{item}</span>
                     </li>
                   ))}
                 </ul>
@@ -246,7 +327,7 @@ export default function AnalysisDetail() {
                   {analysis.risks.map((item, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                       <span className="material-symbols-outlined text-error text-base mt-0.5">warning</span>
-                      {item}
+                      <span className="break-words">{item}</span>
                     </li>
                   ))}
                 </ul>
@@ -265,7 +346,7 @@ export default function AnalysisDetail() {
                 {analysis.causes.map((cause, i) => (
                   <div key={i} className="p-3 bg-surface-variant rounded border border-outline-variant">
                     <div className="flex justify-between items-start gap-2">
-                      <p className="text-sm text-on-surface font-medium">{cause.cause}</p>
+                      <p className="text-sm text-on-surface font-medium break-words">{cause.cause}</p>
                       <StatusChip status={cause.impact === 'high' ? 'bearish' : cause.impact === 'low' ? 'bullish' : 'neutral'} label={cause.impact} />
                     </div>
                     {cause.confidence != null && (
@@ -299,7 +380,7 @@ export default function AnalysisDetail() {
                     {recommendation.reasons.map((r, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs text-on-surface">
                         <span className="material-symbols-outlined text-tertiary text-sm mt-0.5">chevron_right</span>
-                        {r}
+                        <span className="break-words">{r}</span>
                       </li>
                     ))}
                   </ul>
@@ -312,7 +393,7 @@ export default function AnalysisDetail() {
                     {recommendation.risks.map((r, i) => (
                       <li key={i} className="flex items-start gap-2 text-xs text-on-surface">
                         <span className="material-symbols-outlined text-error text-sm mt-0.5">warning</span>
-                        {r}
+                        <span className="break-words">{r}</span>
                       </li>
                     ))}
                   </ul>
@@ -364,7 +445,7 @@ export default function AnalysisDetail() {
               <div className="space-y-3">
                 {data.source_backed_claims.map((claim, i) => (
                   <div key={i} className="p-3 bg-surface-variant rounded border border-outline-variant">
-                    <p className="text-sm text-on-surface mb-2">{claim.claim}</p>
+                    <p className="text-sm text-on-surface mb-2 break-words">{claim.claim}</p>
                     {claim.source && (
                       <div className="flex flex-wrap gap-1.5">
                         <span className="text-[10px] bg-surface-container-high px-1.5 py-0.5 rounded data-font text-on-surface-variant">
@@ -402,7 +483,7 @@ export default function AnalysisDetail() {
                 {analysis.invalidating_conditions.map((item, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-on-surface">
                     <span className="material-symbols-outlined text-error text-base mt-0.5">block</span>
-                    {item}
+                    <span className="break-words">{item}</span>
                   </li>
                 ))}
               </ul>
@@ -410,6 +491,17 @@ export default function AnalysisDetail() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete analysis"
+        message={`Permanently delete this ${data.ticker} analysis (${data.analysis_id})? This cannot be undone.`}
+        confirmLabel="Delete"
+        danger
+        busy={acting}
+        onConfirm={handleDeleteAnalysis}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

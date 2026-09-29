@@ -8,7 +8,7 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,8 +88,11 @@ async def get_market_indices_data() -> dict[str, Any]:
 
 
 @router.get("/overview", response_model=MarketOverview)
-async def get_market_overview(db: AsyncSession = Depends(get_db)):
-    """Get market overview (Section 47)."""
+async def get_market_overview(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=10, le=50),
+):
+    """Get market overview (lean: only fields the FE renders)."""
     macro_engine = MacroAnalysisEngine(db)
     macro_snapshot = await macro_engine.get_macro_snapshot()
 
@@ -165,6 +168,19 @@ async def get_market_overview(db: AsyncSession = Depends(get_db)):
         movers_status = "no_data"
         movers_reason = "No companies exceeded the anomaly movement threshold"
 
+    # Lean macro: only keys the FE renders (Market/Dashboard + News VIX widget).
+    lean_macro = {
+        k: macro_snapshot.get(k)
+        for k in (
+            "fed_funds_rate",
+            "treasury_10y",
+            "cpi",
+            "unemployment_rate",
+            "vix",
+            "yield_curve_slope",
+        )
+    }
+
     return MarketOverview(
         market={
             "trend": trend,
@@ -172,17 +188,6 @@ async def get_market_overview(db: AsyncSession = Depends(get_db)):
             "risk_level": risk_level,
             "economic_regime": regime,
         },
-        indices={"indices": indices},
-        top_movers=[
-            {
-                "company_id": a.company_id,
-                "score": a.overall_score,
-                "triggered": a.triggered,
-            }
-            for a in anomalies
-        ],
-        top_movers_status=movers_status,
-        top_movers_reason=movers_reason,
         major_events=[
             {
                 "id": e.id,
@@ -191,9 +196,9 @@ async def get_market_overview(db: AsyncSession = Depends(get_db)):
                 "impact": e.impact,
                 "description": e.description,
             }
-            for e in events
+            for e in events[:limit]
         ],
-        macro_environment=macro_snapshot,
+        macro_environment=lean_macro,
     )
 
 
@@ -235,7 +240,6 @@ async def get_top_movers(db: AsyncSession = Depends(get_db)):
             "ticker": ticker,
             "name": name,
             "price": price.close,
-            "change": change_pct,
             "change_percent": change_pct,
             "volume": price.volume,
             "up": change_pct >= 0,

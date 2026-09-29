@@ -7,7 +7,6 @@ import {
   getFinancialMetrics,
   getTechnicalIndicators,
 } from '../services/api';
-import StatusChip from '../components/StatusChip';
 
 export default function CompanyDetail() {
   const { ticker } = useParams();

@@ -4,6 +4,21 @@ import { getNews, getMarketOverview, getEvents } from '../services/api';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
+// Both News-page feeds (Event Timeline + Correlated News) share this
+// height cap so the columns always render at the same height; the feeds
+// scroll internally for anything beyond what fits.
+const FEED_MAX_HEIGHT = 'max-h-[68rem]';
+
+// Map UI labels to actual API event type codes.
+const EVENT_TYPE_OPTIONS = {
+  'Earnings': ['EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_IN_LINE', 'EARNINGS_REPORT', 'GUIDANCE_UPDATE'],
+  'Regulatory/Legal': ['REGULATORY', 'LEGAL', 'INSIDER_TRADING', 'INSTITUTIONAL_CHANGE'],
+  'Analyst': ['ANALYST'],
+  'Management': ['MANAGEMENT_CHANGE', 'DIVIDEND_CHANGE', 'STOCK_SPLIT', 'BUYBACK'],
+  'Macro': ['MACRO_EVENT', 'SECTOR_EVENT'],
+  'Corporate': ['PRODUCT_LAUNCH', 'MA', 'SUPPLY_CHAIN', 'OTHER'],
+};
+
 export default function News() {
   const toast = useToast();
   const navigate = useNavigate();
@@ -13,15 +28,7 @@ export default function News() {
   const [vixChange, setVixChange] = useState(null);
   const [tickerFilter, setTickerFilter] = useState('');
   const [minImpact, setMinImpact] = useState(0.5);
-  // Map UI labels to actual API event type codes.
-  const EVENT_TYPE_OPTIONS = {
-    'Earnings': ['EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_IN_LINE', 'EARNINGS_REPORT', 'GUIDANCE_UPDATE'],
-    'Regulatory/Legal': ['REGULATORY', 'LEGAL', 'INSIDER_TRADING', 'INSTITUTIONAL_CHANGE'],
-    'Analyst': ['ANALYST'],
-    'Management': ['MANAGEMENT_CHANGE', 'DIVIDEND_CHANGE', 'STOCK_SPLIT', 'BUYBACK'],
-    'Macro': ['MACRO_EVENT', 'SECTOR_EVENT'],
-    'Corporate': ['PRODUCT_LAUNCH', 'MA', 'SUPPLY_CHAIN', 'OTHER'],
-  };
+  const [error, setError] = useState(null);
   const [eventTypes, setEventTypes] = useState({
     'Earnings': true,
     'Regulatory/Legal': true,
@@ -53,8 +60,9 @@ export default function News() {
       const v = mktData?.macro_environment?.vix;
       setVix(v != null ? v.toFixed(2) : null);
       setVixChange(v != null && v < 20 ? 'low' : v < 30 ? 'moderate' : 'high');
-    } catch {
-      // API not available
+      setError(null);
+    } catch (e) {
+      setError(e.message || 'Failed to load market intelligence');
     }
   }, [tickerFilter, eventTypes, minImpact]);
 
@@ -80,6 +88,13 @@ export default function News() {
           </button>
         </div>
       </div>
+
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load market intelligence: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={() => loadData()}>Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-12 gap-gutter">
         {/* Filters Sidebar (Span 3) */}
@@ -155,15 +170,18 @@ export default function News() {
         {/* Event Timeline (Span 5) */}
         <div className="col-span-12 lg:col-span-5 flex flex-col gap-gutter">
           <div className="card flex-1 flex flex-col">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
                 <span className="material-symbols-outlined text-secondary">timeline</span>
                 Event Timeline
               </h2>
+              <span className="text-xs text-on-surface-variant data-font">{events.length} {events.length === 1 ? 'event' : 'events'}</span>
             </div>
-            <div className="relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2">
+            {/* Same height cap as Correlated News — applied unconditionally
+                so the columns are always equal regardless of item counts. */}
+            <div className={`relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2 ${FEED_MAX_HEIGHT}`}>
               {events.length > 0 ? (
-                events.slice(0, 8).map((event) => (
+                events.map((event) => (
                  <div key={event.id} className="relative group cursor-pointer">
                     <div className={`absolute -left-[29px] top-1 w-3 h-3 rounded-full ring-4 ring-surface-container-low ${event.impact === 'positive' ? 'bg-secondary' : event.impact === 'negative' ? 'bg-error' : 'bg-surface-variant border border-outline-variant'}`} />
                     <div className="bg-surface-container-high border border-outline-variant rounded p-3 group-hover:border-secondary transition-colors">
@@ -212,8 +230,10 @@ export default function News() {
                 <span className="material-symbols-outlined text-primary">feed</span>
                 Correlated News
               </h2>
+              <span className="text-xs text-on-surface-variant data-font">{news.length} {news.length === 1 ? 'article' : 'articles'}</span>
             </div>
-            <div className="space-y-3 flex-1 overflow-y-auto">
+            {/* Same height cap as the Event Timeline — applied unconditionally. */}
+            <div className={`space-y-3 flex-1 overflow-y-auto pr-1 ${FEED_MAX_HEIGHT}`}>
               {news.length > 0 ? (
                 news.map((article) => (
                   <div

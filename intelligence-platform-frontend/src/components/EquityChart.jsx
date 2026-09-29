@@ -15,7 +15,7 @@ const fmtMoney = (v) =>
 const fmtDate = (d) =>
   new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-function EquityTooltip({ active, payload, label }) {
+function EquityTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
   return (

@@ -117,6 +117,69 @@ def test_observation_to_evidence_domain_neutral():
     assert evs[1].source_name == "workday"
 
 
+# ── Citation-support filter ────────────────────────────────────────
+
+RAG_WITH_CONTENT = {
+    "news": [
+        {
+            "id": 10,
+            "similarity": 0.90,
+            "metadata": {},
+            "content": "Apple reported revenue growth of 16.4% driven by services strength "
+                       "and record free cash flow generation this quarter.",
+        },
+        {
+            "id": 11,
+            "similarity": 0.85,
+            "metadata": {},
+            "content": "Apple stock is projected to deliver 12% annualized returns over the "
+                       "next four years according to long-term market projections.",
+        },
+    ],
+}
+
+
+def test_filter_supported_evidence_ids_keeps_backing_source():
+    attributor = EvidenceAttributor()
+    attributor.register_sources(RAG_WITH_CONTENT)
+    claim = {
+        "claim": "Apple's revenue growth was 16.4%, driven by services strength.",
+        "evidence_ids": ["news_10", "news_11"],
+    }
+    # news_10 shares revenue/growth/services tokens; news_11 is a
+    # valid-but-unrelated returns-projection article.
+    assert attributor.filter_supported_evidence_ids(claim) == ["news_10"]
+
+
+def test_filter_supported_evidence_ids_drops_unrelated_citation():
+    attributor = EvidenceAttributor()
+    attributor.register_sources(RAG_WITH_CONTENT)
+    claim = {
+        "claim": "Free cash flow growth reached 30.8% in the latest quarter.",
+        "evidence_ids": ["news_11"],
+    }
+    assert attributor.filter_supported_evidence_ids(claim) == []
+
+
+def test_filter_supported_evidence_ids_keeps_citation_when_content_missing():
+    attributor = EvidenceAttributor()
+    attributor.register_sources(RAG)  # metadata-only fixture — no content
+    claim = {
+        "claim": "Any claim about revenue growth numbers for the company.",
+        "evidence_ids": ["news_10"],
+    }
+    # Too little content to judge → conservative: keep the citation.
+    assert attributor.filter_supported_evidence_ids(claim) == ["news_10"]
+
+
+def test_filter_supported_evidence_ids_short_claim_kept():
+    attributor = EvidenceAttributor()
+    attributor.register_sources(RAG_WITH_CONTENT)
+    claim = {"claim": "Strong", "evidence_ids": ["news_11"]}
+    # Claim has fewer than 2 distinctive tokens → keep as-is.
+    assert attributor.filter_supported_evidence_ids(claim) == ["news_11"]
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getNewsItem } from '../services/api';
-import StatusChip from '../components/StatusChip';
 
 export default function NewsDetail() {
   const { id } = useParams();

@@ -5,7 +5,7 @@ Company API endpoints.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,7 +22,7 @@ async def list_companies(
     offset: int = Query(default=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all tracked companies."""
+    """List all tracked companies (lean rows: what the FE table renders)."""
     query = select(Company)
     if sector:
         query = query.where(Company.sector == sector)
@@ -31,14 +31,8 @@ async def list_companies(
     result = await db.execute(query)
     companies = result.scalars().all()
 
-    count_query = select(func.count(Company.id))
-    if sector:
-        count_query = count_query.where(Company.sector == sector)
-    total = (await db.execute(count_query)).scalar() or 0
-
     return CompanyListResponse(
         companies=[CompanyResponse.model_validate(c) for c in companies],
-        total=total,
     )
 
 

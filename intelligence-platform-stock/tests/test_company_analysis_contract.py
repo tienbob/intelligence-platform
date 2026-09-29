@@ -104,6 +104,9 @@ class _FakeSession:
             obj.id = 9000 + len(self.added)
         self.added.append(obj)
 
+    async def execute(self, statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: self.existing)
+
     async def flush(self):
         pass
 
@@ -159,11 +162,11 @@ def test_worker_mode_produces_full_contract_row():
     assert llm.calls[0]["attributor"] is attributors[0]
     assert llm.calls[0]["context"] == CONTEXT
 
-    # Source rows: one per claim; "12%" coerced to 12.0; FK id assigned
-    # (non-null) — guards the pre-flush None-id bug caught live.
+    # Source rows: one per claim; values persisted verbatim (column is
+    # String — non-numeric values survive); FK id assigned (non-null) —
+    # guards the pre-flush None-id bug caught live.
     sources = [a for a in session.added if isinstance(a, AnalysisSource)]
-    assert len(sources) == 2
-    assert sources[0].value == 12.0 and sources[1].value == 3.5
+    assert sources[0].value == "12%" and sources[1].value == "3.5"
     assert all(s.analysis_id is not None for s in sources)
     assert all(s.analysis_id == analysis.id for s in sources)
 
@@ -179,6 +182,7 @@ def test_api_existing_row_mode_satisfies_same_contract():
         analysis_id="existing-1", id=42, status="collecting_data",
         investment_score=None, risk_score=None,
     )
+    session.existing = existing
     stages = []
 
     async def on_stage(name):

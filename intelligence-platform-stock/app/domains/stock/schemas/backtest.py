@@ -54,7 +54,7 @@ class BacktestSnapshotRequest(BaseModel):
 
 
 class BacktestRunResponse(BaseModel):
-    """Backtest run summary."""
+    """Lean run summary — only fields rendered by the FE runs table."""
 
     id: int
     name: str
@@ -63,13 +63,7 @@ class BacktestRunResponse(BaseModel):
     start_date: datetime
     end_date: datetime
     initial_capital: float
-    benchmark_ticker: Optional[str] = None
-    parameters: Optional[dict[str, Any]] = None
-    snapshot_id: Optional[int] = None
-    scoring_model: Optional[str] = None
-    scoring_version: Optional[str] = None
     error_message: Optional[str] = None
-    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -78,19 +72,15 @@ class BacktestRunListResponse(BaseModel):
     """List of backtest runs."""
 
     runs: list[BacktestRunResponse]
-    total: int
 
 
 class BacktestSnapshotResponse(BaseModel):
-    """Backtest snapshot summary."""
+    """Lean snapshot row — only fields rendered by the FE table."""
 
     id: int
     name: str
     as_of: datetime
     description: Optional[str] = None
-    source_data_version: Optional[str] = None
-    created_by: Optional[str] = None
-    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -99,40 +89,33 @@ class BacktestSnapshotListResponse(BaseModel):
     """List of backtest snapshots."""
 
     snapshots: list[BacktestSnapshotResponse]
-    total: int
 
 
 class BacktestResultResponse(BaseModel):
-    """Backtest performance metrics."""
+    """Lean result — only metrics rendered by the Backtest detail view."""
 
-    id: int
-    run_id: int
     total_return: Optional[float] = None
     annualized_return: Optional[float] = None
     volatility: Optional[float] = None
     sharpe_ratio: Optional[float] = None
     max_drawdown: Optional[float] = None
     win_rate: Optional[float] = None
-    total_trades: Optional[int] = None
     final_capital: Optional[float] = None
     equity_curve: Optional[dict[str, Any]] = None
-    trade_count: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
 
 class BacktestTradeResponse(BaseModel):
-    """Simulated trade."""
+    """Lean trade row — only fields rendered by the FE trades table."""
 
     id: int
-    run_id: int
     ticker: str
     action: str
     trade_date: datetime
     price: float
     shares: float
     amount: float
-    reason: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -141,21 +124,14 @@ class BacktestTradeListResponse(BaseModel):
     """List of backtest trades."""
 
     trades: list[BacktestTradeResponse]
-    total: int
 
 
 class BacktestBenchmarkResponse(BaseModel):
-    """Benchmark comparison."""
+    """Lean benchmark — only comparison rendered by the FE detail view."""
 
-    id: int
-    run_id: int
     benchmark_ticker: str
     benchmark_return: Optional[float] = None
     strategy_return: Optional[float] = None
-    alpha: Optional[float] = None
-    beta: Optional[float] = None
-    tracking_error: Optional[float] = None
-    information_ratio: Optional[float] = None
     outperformed: Optional[bool] = None
 
     model_config = {"from_attributes": True}
@@ -198,11 +174,9 @@ class BacktestAIEvaluationResponse(BaseModel):
 
 
 class BacktestRunDetailResponse(BaseModel):
-    """Full backtest run detail with results."""
+    """Lean run detail — drops score/AI evaluations the FE never renders."""
 
     run: BacktestRunResponse
     result: Optional[BacktestResultResponse] = None
     benchmark: Optional[BacktestBenchmarkResponse] = None
     trades: list[BacktestTradeResponse] = Field(default_factory=list)
-    score_evaluations: list[BacktestScoreEvaluationResponse] = Field(default_factory=list)
-    ai_evaluations: list[BacktestAIEvaluationResponse] = Field(default_factory=list)

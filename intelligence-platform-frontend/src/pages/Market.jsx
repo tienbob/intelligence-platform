@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getMarketOverview, getTopMovers } from '../services/api';
-import { useToast } from '../components/Toast';
 import MetricTile from '../components/MetricTile';
 import StatusChip from '../components/StatusChip';
 
 export default function Market() {
-  const toast = useToast();
   const [market, setMarket] = useState(null);
   const [topMovers, setTopMovers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const [overviewData, moversData] = await Promise.all([
         getMarketOverview(),
@@ -19,8 +19,8 @@ export default function Market() {
       ]);
       setMarket(overviewData);
       setTopMovers(moversData?.top_movers || []);
-    } catch {
-      // API not available
+    } catch (e) {
+      setError(e.message || 'Failed to load market data');
     } finally {
       setLoading(false);
     }
@@ -47,6 +47,22 @@ export default function Market() {
         </div>
       </div>
 
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load market data: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={loadData}>Retry</button>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card py-20 text-center text-on-surface-variant">
+          <span className="material-symbols-outlined text-4xl mb-2 block animate-pulse">analytics</span>
+          <p className="text-sm">Loading market data…</p>
+        </div>
+      )}
+
+      {!loading && (
+        <>
       {/* Metrics Row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-gutter mb-6">
         <MetricTile
@@ -179,6 +195,8 @@ export default function Market() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

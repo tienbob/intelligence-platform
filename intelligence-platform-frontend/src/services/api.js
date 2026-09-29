@@ -1,4 +1,5 @@
 import { getStoredToken, clearTokens } from './token';
+import { refreshAccessToken } from './refresh';
 
 const BASE_URL = '/api/v1';
 
@@ -10,7 +11,7 @@ function isAuthRoute(url) {
   return AUTH_ROUTES.some((route) => url.includes(route));
 }
 
-async function request(url, options = {}) {
+async function request(url, options = {}, retried = false) {
   const token = getStoredToken();
   const headers = { 'Content-Type': 'application/json', ...options.headers };
   if (token) {
@@ -20,13 +21,20 @@ async function request(url, options = {}) {
     headers,
     ...options,
   });
-  if (!res.ok) {
-    // Session expired (401) on a protected endpoint → clear tokens and
-    // redirect to the login page. Avoids redirect loops on auth endpoints.
-    if (res.status === 401 && !isAuthRoute(url) && !window.location.pathname.startsWith('/login')) {
-      clearTokens();
-      window.location.href = '/login';
+  // Session expired (401) on a protected endpoint → try one silent token
+  // refresh, then retry the request once. Only if the refresh fails do we
+  // clear tokens and redirect (avoids redirect loops on auth endpoints).
+  if (res.status === 401 && !isAuthRoute(url) && !retried) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return request(url, options, true);
     }
+    if (!window.location.pathname.startsWith('/login')) {
+      clearTokens();
+      window.location.href = '/login?expired=1';
+    }
+  }
+  if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     // Architecture §71: error responses use {"error": {"code": ..., "message": ...}}
     // Fall back to flat {"detail": "..."} for backward compatibility
@@ -103,6 +111,7 @@ export const getTopMovers = () => request('/market/top-movers');
 export const createCompanyAnalysis = (body) =>
   request('/analysis/company', { method: 'POST', body: JSON.stringify(body) });
 export const getAnalysis = (id) => request(`/analysis/${id}`);
+export const cancelAnalysis = (id) => request(`/analysis/${id}/cancel`, { method: 'POST' });
 export const deleteAnalysis = (id) => request(`/analysis/${id}`, { method: 'DELETE' });
 export const getAnalysisJobs = (params = {}) => {
   const qs = new URLSearchParams(params).toString();

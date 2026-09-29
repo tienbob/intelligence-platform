@@ -36,6 +36,7 @@ def _fake_pipeline_result():
         insights=[{"text": "i"}],
         risks=["r"],
         metadata={
+            "scoring_metadata": {"score_id": 101},
             "llm_model": "fake-model",
             "llm_provider": "fake",
             "prompt_name": "stock_company",
@@ -94,7 +95,8 @@ def _install_framework_fake(monkeypatch):
     pipe = _FakePipeline()
     monkeypatch.setattr(ca, "_build_framework_pipeline", lambda: pipe)
 
-    async def loader(session, company_id):
+    async def loader(session, company_id, score_id):
+        assert score_id == 101
         assert company_id == 7
         return _FakeScore()
 
@@ -165,9 +167,15 @@ def test_both_wrappers_respect_framework_flag(monkeypatch):
     async def on_stage(name):
         stages.append(name)
 
+    async def execute(statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: existing)
+
+    session = _PersistSession()
+    session.execute = execute
+
     async def api_style():
         await ca.execute_company_analysis(
-            _PersistSession(), _FakeCompany(),
+            session, _FakeCompany(),
             existing=existing, on_stage=on_stage,
             engine="framework", score_loader=loader,
         )

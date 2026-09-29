@@ -188,6 +188,272 @@ def test_engine_is_domain_neutral():
     assert "candidate_summary" in h_res
 
 
+# ── LLMClient transient-error retry ────────────────────────────────
+
+
+class _FlakyCompletions:
+    """Fails N times with the given exception factory, then succeeds."""
+
+    def __init__(self, failures, exc_factory, content='{"summary": "recovered"}'):
+        self.failures = failures
+        self.exc_factory = exc_factory
+        self.good = _FakeCompletions(content, 7)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.exc_factory()
+        return await self.good.create(**kwargs)
+
+
+def _overloaded_503(retry_after=None):
+    """Build the exact 503 from production: 'high demand', status UNAVAILABLE."""
+    import httpx
+    import openai
+
+    headers = {"retry-after": str(retry_after)} if retry_after is not None else {}
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        headers=headers,
+        json={"error": {"code": 503, "message": "This model is currently experiencing high demand.", "status": "UNAVAILABLE"}},
+    )
+    return openai.InternalServerError("Error code: 503", response=response, body=None)
+
+
+def _auth_error():
+    import httpx
+    import openai
+
+    response = httpx.Response(
+        401,
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        json={"error": {"message": "bad key"}},
+    )
+    return openai.AuthenticationError("Error code: 401", response=response, body=None)
+
+
+def _daily_quota_429():
+    """Gemini free-tier per-day quota 429, exactly as seen in production."""
+    import httpx
+    import openai
+
+    response = httpx.Response(
+        429,
+        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
+        json={"error": {"code": 429, "message": "You exceeded your current quota", "status": "RESOURCE_EXHAUSTED"}},
+    )
+    return openai.RateLimitError(
+        "Error code: 429 - You exceeded your current quota. "
+        "Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests. "
+        "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+        response=response,
+        body=None,
+    )
+
+
+def _retry_client(completions, max_attempts=3):
+    from app.intelligence.llm.client import LLMClient as _Client
+
+    client = _Client(
+        api_key="test-key",
+        model="test-model",
+        max_attempts=max_attempts,
+        retry_base_delay=0.01,
+        retry_max_delay=0.02,
+    )
+    client._client = _FakeSDK(completions)  # inject fake transport
+    return client
+
+
+def test_classify_llm_error_transient_vs_permanent():
+    from app.intelligence.llm.client import classify_llm_error
+
+    # Production 503 with no Retry-After → transient, no hint.
+    assert classify_llm_error(_overloaded_503()) == -1.0
+    # Server-supplied hint is honored.
+    assert classify_llm_error(_overloaded_503(retry_after=7)) == 7.0
+    # Gemini free-tier per-DAY quota → fail over immediately, don't retry.
+    assert classify_llm_error(_daily_quota_429()) == -2.0
+    # Non-transient / non-provider errors are never retried.
+    assert classify_llm_error(_auth_error()) is None
+    assert classify_llm_error(ValueError("not a provider error")) is None
+
+
+def test_daily_quota_fails_over_to_fallback_immediately():
+    """Free-tier daily quota: one primary attempt, then the fallback —
+    no minutes of futile backoff on a model that cannot succeed today."""
+    from app.intelligence.llm.client import DAILY_QUOTA, classify_llm_error
+
+    class _QuotaRoutingCompletions:
+        def __init__(self):
+            self.good = _FakeCompletions('{"summary": "from fallback"}', 7)
+            self.calls = []
+
+        async def create(self, model=None, **kwargs):
+            self.calls.append(model)
+            if model == "primary-model":
+                raise _daily_quota_429()
+            return await self.good.create(model=model, **kwargs)
+
+    comps = _QuotaRoutingCompletions()
+    client = _fallback_client(comps, max_attempts=6)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    result, _ = asyncio.run(run())
+    assert result == {"summary": "from fallback"}
+    # Exactly ONE primary attempt (no retry loop), then the backup.
+    assert comps.calls == ["primary-model", "backup-model"]
+    assert classify_llm_error(_daily_quota_429()) == DAILY_QUOTA
+
+
+def test_chat_json_retries_transient_503_and_recovers():
+    comps = _FlakyCompletions(failures=2, exc_factory=_overloaded_503)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    result, tokens = asyncio.run(run())
+    assert result == {"summary": "recovered"}
+    assert tokens == 7
+    assert comps.calls == 3  # failed twice, succeeded on the third attempt
+
+
+def test_chat_json_gives_up_after_max_attempts():
+    comps = _FlakyCompletions(failures=99, exc_factory=_overloaded_503)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001 — assert the SDK error propagates
+        raised = exc
+    assert raised is not None
+    assert "503" in str(raised)
+    assert comps.calls == 3  # exactly max_attempts, no more
+
+
+def test_chat_json_does_not_retry_non_transient_errors():
+    comps = _FlakyCompletions(failures=1, exc_factory=_auth_error)
+    client = _retry_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+    assert raised is not None
+    assert comps.calls == 1  # auth errors raise immediately — retrying can't help
+
+
+class _ModelRoutingCompletions:
+    """Fails 503 for the listed models, succeeds otherwise; records order."""
+
+    def __init__(self, failing_models, content='{"summary": "from fallback"}'):
+        self.failing_models = set(failing_models)
+        self.good = _FakeCompletions(content, 7)
+        self.calls = []
+
+    async def create(self, model=None, **kwargs):
+        self.calls.append(model)
+        if model in self.failing_models:
+            raise _overloaded_503()
+        return await self.good.create(model=model, **kwargs)
+
+
+def _fallback_client(completions, max_attempts=2):
+    from app.intelligence.llm.client import LLMClient as _Client
+
+    client = _Client(
+        api_key="test-key",
+        model="primary-model",
+        fallback_model="backup-model",
+        max_attempts=max_attempts,
+        retry_base_delay=0.01,
+        retry_max_delay=0.02,
+    )
+    client._client = _FakeSDK(completions)  # inject fake transport
+    return client
+
+
+def test_chat_json_falls_back_when_primary_model_overloaded():
+    comps = _ModelRoutingCompletions(failing_models={"primary-model"})
+    client = _fallback_client(comps, max_attempts=2)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    result, tokens = asyncio.run(run())
+    assert result == {"summary": "from fallback"}
+    assert tokens == 7
+    # Primary tried exactly max_attempts times, then the backup succeeded.
+    assert comps.calls == ["primary-model", "primary-model", "backup-model"]
+    assert client.last_model_used == "backup-model"
+    meta = client.build_meta(
+        tokens_used=7, prompt_name="company_analysis",
+        prompt_version="1.0", analysis_type="company",
+    )
+    assert meta["model"] == "backup-model"  # provenance survives fallback
+
+
+def test_no_fallback_on_non_transient_errors():
+    comps = _FlakyCompletions(failures=1, exc_factory=_auth_error)
+    client = _fallback_client(comps, max_attempts=3)
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+    assert raised is not None
+    assert comps.calls == 1  # auth errors raise immediately — no retries, no fallback
+
+
+def test_exhausted_retries_without_fallback_raise():
+    comps = _ModelRoutingCompletions(failing_models={"test-model"})
+    client = _retry_client(comps, max_attempts=2)  # no fallback configured
+
+    def run():
+        return client.chat_json("system", "user")
+
+    try:
+        asyncio.run(run())
+        raised = None
+    except Exception as exc:  # noqa: BLE001
+        raised = exc
+    assert raised is not None
+    assert "503" in str(raised)
+    assert comps.calls == ["test-model", "test-model"]
+
+
+def test_llm_service_passes_retry_settings_to_engine():
+    """LLMService wires the domain retry settings into the framework engine."""
+    from app.intelligence.llm.client import LLMClient as _Client
+    from app.domains.stock.config import get_stock_config
+    from app.domains.stock.scoring.llm import LLMService
+
+    cfg = get_stock_config()
+    service = LLMService(api_key="k", model="m", provider="test")
+    engine = service._get_engine()
+    assert isinstance(engine, _Client)
+    assert engine.max_attempts == cfg.LLM_MAX_ATTEMPTS
+    assert engine.retry_base_delay == cfg.LLM_RETRY_BASE_DELAY
+    assert engine.retry_max_delay == cfg.LLM_RETRY_MAX_DELAY
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -33,6 +34,22 @@ ANALYSIS_VERSION = "1.0"
 StageCallback = Callable[[str], Awaitable[None]]
 
 
+class AnalysisCancelled(Exception):
+    """The job was cancelled or deleted while work was in progress."""
+
+
+async def lock_active_analysis(session: AsyncSession, analysis_id: str) -> Analysis:
+    # Serialize transitions with cancellation and refresh the identity map.
+    result = await session.execute(
+        select(Analysis).where(Analysis.analysis_id == analysis_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
+    analysis = result.scalar_one_or_none()
+    if analysis is None or analysis.status == "cancelled":
+        raise AnalysisCancelled(analysis_id)
+    return analysis
+
+
 @dataclass
 class AnalysisExecutionResult:
     """Everything the execution produced; wrappers decide what to expose."""
@@ -44,16 +61,18 @@ class AnalysisExecutionResult:
     evidence_package: dict[str, Any]
 
 
-def _safe_float(v: Any) -> float | None:
-    """Coerce an LLM-supplied numeric-ish value to float (DB column is Float)."""
+def _claim_value(v: Any) -> str | None:
+    """Persist the LLM-supplied claim value verbatim (DB column is String).
+
+    Claim values are not always numeric — e.g. ``ceo_transition: "John
+    Ternus"`` — so the column stores the raw value. Whole floats drop the
+    cosmetic ".0" (150000000000, not "150000000000.0").
+    """
     if v is None:
         return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    try:
-        return float(str(v).replace(",", "").replace("$", "").replace("%", ""))
-    except (ValueError, TypeError):
-        return None
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
 
 
 class CompanyAnalysisService:
@@ -152,10 +171,19 @@ class CompanyAnalysisService:
 
         # Full LLM output plus debug embeddings of inputs/evidence.
         analysis.llm_analysis = {
+            "_request": (analysis.llm_analysis or {}).get("_request") if hasattr(analysis, "llm_analysis") else None,
             **llm_output,
             "_input_context": context,
             "_evidence": evidence_package,
             "_meta_full": meta,
+            "_score_snapshot": {
+                field: getattr(score, field, None)
+                for field in (
+                    "overall_score", "risk_score", "confidence", "recommendation",
+                    "fundamental_score", "valuation_score", "growth_score",
+                    "data_quality_score",
+                )
+            },
         }
 
         # Deterministic scoring contract (engine-owned, never LLM opinion).
@@ -182,7 +210,7 @@ class CompanyAnalysisService:
                     source_type=source.get("type", ""),
                     source_name=source.get("source", ""),
                     metric=source.get("metric"),
-                    value=_safe_float(source.get("value")),
+                    value=_claim_value(source.get("value")),
                     period=source.get("period"),
                 )
             )
@@ -200,7 +228,7 @@ class CompanyAnalysisService:
     ) -> Analysis:
         """Write the full canonical contract; create or update in place."""
         if existing is not None:
-            analysis = existing
+            analysis = await lock_active_analysis(self.session, existing.analysis_id)
         else:
             from uuid import uuid4
 
@@ -354,17 +382,15 @@ def _build_framework_pipeline():
     return _framework_pipeline_factory()
 
 
-async def _load_latest_score(session: AsyncSession, company_id: int) -> Any:
-    """Deterministic scores written by the pipeline's scoring strategy."""
+async def _load_run_score(session: AsyncSession, company_id: int, score_id: int) -> Any:
+    """Load only the score identified by this pipeline run."""
     from sqlalchemy import select
 
     from app.domains.stock.models.analysis import InvestmentScore
 
     result = await session.execute(
         select(InvestmentScore)
-        .where(InvestmentScore.company_id == company_id)
-        .order_by(InvestmentScore.timestamp.desc())
-        .limit(1)
+        .where(InvestmentScore.company_id == company_id, InvestmentScore.id == score_id)
     )
     return result.scalars().first()
 
@@ -399,7 +425,10 @@ async def _execute_framework(
             f"{result.metadata.get('stages', {})}"
         )
 
-    score = await (score_loader or _load_latest_score)(session, company.id)
+    score_id = (result.metadata.get("scoring_metadata") or {}).get("score_id")
+    if score_id is None:
+        raise RuntimeError("framework analysis did not return a score identifier")
+    score = await (score_loader or _load_run_score)(session, company.id, score_id)
     if score is None:
         raise RuntimeError(
             f"framework analysis produced no deterministic score row "
@@ -489,6 +518,8 @@ async def execute_company_analysis(
         engine = get_stock_config().ANALYSIS_ENGINE
 
     if engine == "framework":
+        if not all((include_news, include_fundamentals, include_technical, include_macro)):
+            raise ValueError("Framework analysis requires all data sources")
         return await _execute_framework(
             session,
             company,

@@ -50,6 +50,14 @@ class StockConfig(BaseSettings):
     LLM_BASE_URL: Optional[str] = None
     LLM_TEMPERATURE: float = 0.2
     LLM_MAX_TOKENS: int = 4096
+    # App-level retry for transient LLM provider errors (429/5xx/timeouts).
+    LLM_MAX_ATTEMPTS: int = 6
+    LLM_RETRY_BASE_DELAY: float = 10.0
+    LLM_RETRY_MAX_DELAY: float = 120.0
+    # When the primary model exhausts its retries on a TRANSIENT error
+    # (e.g. demand-spike 503s on a hot model), retry with this model before
+    # giving up. Same provider/base_url; None disables the fallback.
+    LLM_FALLBACK_MODEL: Optional[str] = None
 
     # ── Embeddings ───────────────────────────────────────────────
     EMBEDDING_PROVIDER: str = "openai"
@@ -79,6 +87,11 @@ class StockConfig(BaseSettings):
     SCORE_WEIGHT_SENTIMENT: float = 0.10
     SCORE_WEIGHT_CATALYST: float = 0.10
     SCORE_WEIGHT_RISK: float = 0.15
+
+    # Minimum CompanyNews relevance for a link to spawn a MarketEvent
+    # (1.0 = provider ticker link, 0.85 = headline name match). Prevents
+    # weakly-linked market roundups from creating phantom company events.
+    MIN_EVENT_RELEVANCE: float = 0.8
 
     # ── Portfolio Constraints ────────────────────────────────────
     DEFAULT_MIN_CASH_PCT: float = 0.20

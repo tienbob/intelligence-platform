@@ -69,6 +69,7 @@ class _FakeLLM:
 
 
 class _FakeScoreRow:
+    id = 101
     overall_score = FIXTURE["scoring_result"]["overall_score"]
     confidence = FIXTURE["scoring_result"]["confidence"]
     recommendation = FIXTURE["scoring_result"]["recommendation"]
@@ -163,6 +164,7 @@ def test_aapl_pipeline_fixture_end_to_end(patch_db):
     assert result.recommendation == exp["recommendation"]
     assert len(result.evidence) == exp["evidence_count"]
 
+    assert result.metadata["scoring_metadata"]["score_id"] == 101
     stages = result.metadata["stages"]
     assert list(stages) == [
         "entity_resolution", "ingestion", "normalization", "evidence",

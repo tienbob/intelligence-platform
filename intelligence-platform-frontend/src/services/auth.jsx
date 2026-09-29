@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getStoredToken, getStoredRefreshToken, storeTokens, clearTokens, getStoredUser, storeUser } from './token';
+import { getStoredToken, storeTokens, clearTokens, getStoredUser, storeUser } from './token';
+import { refreshAccessToken } from './refresh';
 
 const AuthContext = createContext(null);
 
@@ -135,31 +136,16 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
+  // Shared single-flight refresh (services/refresh.js) — the same helper the
+  // API request layer uses to silently recover from 401s.
   const refreshToken = useCallback(async () => {
-    const refresh = getStoredRefreshToken();
-    if (!refresh) {
+    const token = await refreshAccessToken();
+    if (!token) {
       logout();
       return null;
     }
-    try {
-      const res = await fetch('/api/v1/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refresh }),
-      });
-      if (!res.ok) {
-        logout();
-        return null;
-      }
-      const json = await res.json();
-      const data = json?.data || json;
-      storeTokens(data.access_token, data.refresh_token);
-      setToken(data.access_token);
-      return data.access_token;
-    } catch {
-      logout();
-      return null;
-    }
+    setToken(token);
+    return token;
   }, [logout]);
 
   return (

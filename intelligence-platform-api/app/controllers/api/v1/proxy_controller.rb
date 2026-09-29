@@ -90,6 +90,10 @@ module Api
         render_python(:get, "/analysis/#{params[:id]}")
       end
 
+      def analysis_cancel
+        render_python(:post, "/analysis/#{params[:id]}/cancel", body: {})
+      end
+
       def analysis_delete
         render_python(:delete, "/analysis/#{params[:id]}")
       end

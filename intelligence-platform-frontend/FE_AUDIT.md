@@ -24,7 +24,8 @@
 | `/companies` | Companies | Protected |
 | `/companies/:ticker` | Company Detail | Protected |
 | `/search` | Search | Protected |
-| `/portfolio` | Investment Intelligence (AI-scored opportunities) | Protected |
+| `/opportunities` | Opportunities (AI-scored) | Protected |
+| `/portfolio` | Redirect → `/opportunities` | Protected |
 | `/analysis` | AI Analysis Jobs | Protected |
 | `/analysis/:analysisId` | Analysis Detail | Protected |
 | `/backtest` | Backtesting | Protected |

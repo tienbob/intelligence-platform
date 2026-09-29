@@ -39,6 +39,18 @@ REQUIRED_CLAIM_FIELDS = [
 AnalysisValidationError = OutputValidationError
 
 
+def normalize_confidence(value: Any) -> float:
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        number = float(value)
+        if not 0.0 <= number <= 1.0:
+            raise ValueError
+        return number
+    except (TypeError, ValueError, OverflowError):
+        raise AnalysisValidationError(f"Invalid confidence: {value}")
+
+
 class AnalysisValidator:
     """
     Validates structured LLM output against Stock business rules.
@@ -61,9 +73,7 @@ class AnalysisValidator:
         if missing:
             raise AnalysisValidationError(f"Missing required fields: {missing}")
 
-        confidence = output.get("confidence")
-        if confidence is not None and not (0.0 <= float(confidence) <= 1.0):
-            raise AnalysisValidationError(f"Invalid confidence: {confidence}")
+        output["confidence"] = normalize_confidence(output.get("confidence"))
 
         causes = output.get("causes", [])
         if not isinstance(causes, list):
@@ -105,9 +115,7 @@ class AnalysisValidator:
         if impact not in {"high", "medium", "low"}:
             raise AnalysisValidationError(f"Invalid claim impact: {impact}")
 
-        confidence = claim.get("confidence")
-        if confidence is not None and not (0.0 <= float(confidence) <= 1.0):
-            raise AnalysisValidationError(f"Invalid claim confidence: {confidence}")
+        claim["confidence"] = normalize_confidence(claim.get("confidence"))
 
     @staticmethod
     def validate_risk_analysis(output: dict[str, Any]) -> None:

@@ -1,24 +1,24 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCompanies } from '../services/api';
-import StatusChip from '../components/StatusChip';
 
 export default function Companies() {
   const navigate = useNavigate();
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState('');
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const data = await getCompanies({ limit: 100 });
-        setCompanies(data?.companies || []);
-      } catch {
-        // API not available
-      }
+  async function load() {
+    try {
+      const data = await getCompanies({ limit: 100 });
+      setCompanies(data?.companies || []);
+      setError(null);
+    } catch (e) {
+      setError(e.message || 'Failed to load companies');
     }
-    load();
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
 
   const filtered = companies.filter((c) => {
     const q = search.trim().toLowerCase();
@@ -55,6 +55,13 @@ export default function Companies() {
         </div>
       </div>
 
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load companies: {error}</p>
+          <button className="btn-secondary btn-sm" onClick={load}>Retry</button>
+        </div>
+      )}
+
       <div className="card overflow-hidden !p-0">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -88,14 +95,14 @@ export default function Companies() {
                     </td>
                   </tr>
                 ))
-              ) : (
+              ) : !error ? (
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">business</span>
                     <p>No companies tracked yet. Start by ingesting market data.</p>
                   </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>

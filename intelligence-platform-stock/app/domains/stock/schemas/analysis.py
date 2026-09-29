@@ -7,6 +7,7 @@ recommendation schema (Section 35).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -105,6 +106,8 @@ class AnalysisResponse(BaseModel):
     analysis_id: str
     status: str
     ticker: Optional[str] = None
+    failure_reason: Optional[str] = None
+    request_options: Optional[dict[str, Any]] = None
     investment_score: Optional[float] = None
     risk_score: Optional[float] = None
     confidence: Optional[float] = None
@@ -113,6 +116,9 @@ class AnalysisResponse(BaseModel):
     analysis: Optional[dict[str, Any]] = None
     recommendation: Optional[InvestmentRecommendation] = None
     created_at: Optional[str] = None
+    # True when the caller may cancel/delete this analysis (owner or admin).
+    # System rows (user_id IS NULL) are read-only for regular users.
+    can_manage: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -121,12 +127,9 @@ class AnalysisResponse(BaseModel):
 
 
 class MarketOverview(BaseModel):
+    """Lean market overview — only fields the FE renders."""
+
     market: dict[str, Any]
-    indices: dict[str, Any] = Field(default_factory=dict)
-    top_movers: list[dict[str, Any]] = Field(default_factory=list)
-    # Distinguish "no movers exist" from "no data available".
-    top_movers_status: str = "ok"  # ok | no_data | unavailable
-    top_movers_reason: str | None = None
     major_events: list[dict[str, Any]] = Field(default_factory=list)
     macro_environment: dict[str, Any] = Field(default_factory=dict)
 
@@ -134,16 +137,34 @@ class MarketOverview(BaseModel):
 # ── Investment opportunities (Section 48) ────────────────────────
 
 
+class ScoreComponent(BaseModel):
+    """One weighted component of the screening score."""
+
+    label: str
+    value: float
+    weight: float
+
+
 class InvestmentOpportunity(BaseModel):
+    """Opportunity row with score breakdown + deep-analysis linkage."""
+
     ticker: str
     score: float
     risk_score: float
     volatility: Optional[float] = None
     sector: Optional[str] = None
-    confidence: float
     recommendation: str = "NEUTRAL"
-    reason: str
-    recommended_weight: float
+
+    # Deep-analysis linkage (nullable when no deep analysis exists)
+    analysis_id: Optional[str] = None
+    analysis_status: Optional[str] = None
+    analysis_timestamp: Optional[datetime] = None
+
+    # Screening-model breakdown (always present — the "actual calculation")
+    components: list[ScoreComponent] = Field(default_factory=list)
+    scoring_model: Optional[str] = None
+    scoring_version: Optional[str] = None
+    score_timestamp: Optional[datetime] = None
 
 
 class InvestmentOpportunitiesResponse(BaseModel):

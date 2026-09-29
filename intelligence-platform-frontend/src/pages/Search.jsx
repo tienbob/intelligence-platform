@@ -23,7 +23,7 @@ export default function Search() {
       try {
         const quote = await getStockQuote(upperQuery);
         setResults({ type: 'stock', data: quote });
-      } catch (quoteErr) {
+      } catch {
         // Stock quote failed — fall back to company name search
         const companies = await getCompanies({ limit: 100 });
         const filtered = (companies?.companies || []).filter(
