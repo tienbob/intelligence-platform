@@ -4,10 +4,9 @@ import { getNews, getMarketOverview, getEvents } from '../services/api';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
-// Visible feed cards before Correlated News / Event Timeline start
-// scrolling. Both feeds share the same cap so the columns stay visually
-// aligned.
-const FEED_VIEW_LIMIT = 10;
+// Both News-page feeds (Event Timeline + Correlated News) share this
+// height cap so the columns always render at the same height; the feeds
+// scroll internally for anything beyond what fits.
 const FEED_MAX_HEIGHT = 'max-h-[68rem]';
 
 // Map UI labels to actual API event type codes.
@@ -171,15 +170,16 @@ export default function News() {
         {/* Event Timeline (Span 5) */}
         <div className="col-span-12 lg:col-span-5 flex flex-col gap-gutter">
           <div className="card flex-1 flex flex-col">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
                 <span className="material-symbols-outlined text-secondary">timeline</span>
                 Event Timeline
               </h2>
               <span className="text-xs text-on-surface-variant data-font">{events.length} {events.length === 1 ? 'event' : 'events'}</span>
             </div>
-            {/* Same cap as Correlated News: ~10 cards visible, scrolls for the rest. */}
-            <div className={`relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2 ${events.length > FEED_VIEW_LIMIT ? FEED_MAX_HEIGHT : ''}`}>
+            {/* Same height cap as Correlated News — applied unconditionally
+                so the columns are always equal regardless of item counts. */}
+            <div className={`relative pl-6 border-l border-outline-variant space-y-6 flex-1 overflow-y-auto pr-2 ${FEED_MAX_HEIGHT}`}>
               {events.length > 0 ? (
                 events.map((event) => (
                  <div key={event.id} className="relative group cursor-pointer">
@@ -232,8 +232,8 @@ export default function News() {
               </h2>
               <span className="text-xs text-on-surface-variant data-font">{news.length} {news.length === 1 ? 'article' : 'articles'}</span>
             </div>
-            {/* ~10 cards visible; scrolls only when there are more. */}
-            <div className={`space-y-3 flex-1 overflow-y-auto ${news.length > FEED_VIEW_LIMIT ? `${FEED_MAX_HEIGHT} pr-1` : ''}`}>
+            {/* Same height cap as the Event Timeline — applied unconditionally. */}
+            <div className={`space-y-3 flex-1 overflow-y-auto pr-1 ${FEED_MAX_HEIGHT}`}>
               {news.length > 0 ? (
                 news.map((article) => (
                   <div
