@@ -92,6 +92,43 @@ def test_detail_uses_only_its_own_score_snapshot(legacy, confidence):
     assert db.execute.await_count == 3
 
 
+def test_detail_response_strips_debug_blocks():
+    session = _FakeSession()
+    svc, _ = _service(session, _FakeLLM())
+    analysis = asyncio.run(svc.execute(company=_FakeCompany())).analysis
+    analysis.user_id = 2
+    analysis.created_at = None
+    analysis.llm_analysis["_input_context"] = {"huge": "debug block"}
+    analysis.llm_analysis["evidence"] = {"source_count": 1}
+    db = AsyncMock()
+    db.execute.side_effect = [result(analysis), result(_FakeCompany()),
+                              SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))]
+    response = asyncio.run(api.get_analysis(analysis.analysis_id, request(), db))
+    # Debug/provenance blocks stay persisted on the row but never ship.
+    assert all(not key.startswith("_") for key in response.analysis)
+    assert "evidence" not in response.analysis
+    assert "source_backed_claims" not in response.analysis
+    assert "_input_context" in analysis.llm_analysis
+
+
+def test_detail_passes_through_invalidating_conditions():
+    session = _FakeSession()
+    svc, _ = _service(session, _FakeLLM())
+    analysis = asyncio.run(svc.execute(company=_FakeCompany())).analysis
+    analysis.user_id = 2
+    analysis.created_at = None
+    analysis.llm_analysis["invalidating_conditions"] = [
+        "Failure of the AI roadmap to materialize.",
+    ]
+    db = AsyncMock()
+    db.execute.side_effect = [result(analysis), result(_FakeCompany()),
+                              SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))]
+    response = asyncio.run(api.get_analysis(analysis.analysis_id, request(), db))
+    assert response.recommendation.invalidating_conditions == [
+        "Failure of the AI roadmap to materialize.",
+    ]
+
+
 def test_repeated_cancel_never_deletes():
     row = SimpleNamespace(user_id=2, status="llm_analysis")
     db = AsyncMock()

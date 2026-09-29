@@ -386,11 +386,23 @@ async def get_analysis(
             risks=[
                 f"Risk score: {score.risk_score:.0f}" if score.risk_score else "",
             ],
-            invalidating_conditions=[],
+            # Pass through the analysis' invalidating conditions instead
+            # of always shipping an empty list.
+            invalidating_conditions=list((analysis.llm_analysis or {}).get("invalidating_conditions") or []),
         )
         # Filter empty reasons
         recommendation.reasons = [r for r in recommendation.reasons if r]
         recommendation.risks = [r for r in recommendation.risks if r]
+
+    # Debug/provenance blocks stay persisted on the row but are stripped
+    # from the API response: the FE never renders them and they roughly
+    # tripled the payload size (raw input context, duplicated evidence
+    # packages, score snapshots, embedded request/meta copies).
+    analysis_payload = {
+        key: value
+        for key, value in (analysis.llm_analysis or {}).items()
+        if not key.startswith("_") and key not in ("evidence", "source_backed_claims")
+    }
 
     return AnalysisResponse(
         analysis_id=analysis.analysis_id,
@@ -403,7 +415,7 @@ async def get_analysis(
         confidence=analysis.confidence_score,
         confidence_breakdown=confidence_breakdown,
         source_backed_claims=source_claims,
-        analysis=analysis.llm_analysis,
+        analysis=analysis_payload,
         recommendation=recommendation,
         created_at=analysis.created_at.isoformat() if analysis.created_at else None,
         # Owner (or admin) can cancel/delete from the detail page; system rows

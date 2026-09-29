@@ -16,6 +16,26 @@ from typing import Any
 
 from app.intelligence.evidence.types import RagContext, source_id_for
 
+# Lexical stopwords for the citation-support check — tokens too generic to
+# indicate that a claim is actually derived from the cited document.
+_SUPPORT_STOPWORDS = frozenset({
+    "the", "and", "or", "of", "in", "on", "at", "to", "for", "with",
+    "from", "by", "as", "is", "are", "was", "were", "has", "have",
+    "had", "its", "this", "that", "will", "would", "could", "should",
+    "may", "can", "new", "vs", "versus", "per", "over", "about",
+})
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric tokens of length >= 3, minus stopwords."""
+    import re
+
+    return {
+        tok
+        for tok in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(tok) >= 3 and tok not in _SUPPORT_STOPWORDS
+    }
+
 
 class EvidenceAttributor:
     """
@@ -54,6 +74,7 @@ class EvidenceAttributor:
                     "entity_id": item["id"],
                     "similarity": item.get("similarity", 0.0),
                     "metadata": item.get("metadata", {}),
+                    "content": item.get("content"),
                     "published_at": item.get("metadata", {}).get("published_at"),
                 }
                 self.source_registry[source_id] = source
@@ -103,3 +124,36 @@ class EvidenceAttributor:
     def get_source_metadata(self, source_id: str) -> dict[str, Any] | None:
         """Return the registered source record for ``source_id`` or None."""
         return self.source_registry.get(source_id)
+
+    def filter_supported_evidence_ids(self, claim: dict[str, Any]) -> list[str]:
+        """
+        Keep only cited evidence ids whose content plausibly supports the
+        claim (lexical token overlap).
+
+        Citing a *valid but unrelated* document from the evidence set is a
+        known LLM failure mode (the ID validator proves the id exists, not
+        that the content backs the claim). This is a cheap, deterministic
+        lexical check — no embeddings.
+
+        Conservative by design: when the claim or the cited content is too
+        short to judge, the citation is kept.
+        """
+        evidence_ids = list(claim.get("evidence_ids", []))
+        if not evidence_ids:
+            return evidence_ids
+        text = claim.get("claim") or claim.get("cause") or ""
+        claim_tokens = _content_tokens(text)
+        if len(claim_tokens) < 2:
+            return evidence_ids
+        kept: list[str] = []
+        for eid in evidence_ids:
+            source = self.source_registry.get(eid)
+            if source is None:
+                continue  # unknown ids are the validator's concern
+            content_tokens = _content_tokens(source.get("content") or "")
+            if len(content_tokens) < 10:
+                kept.append(eid)  # too little content to judge
+                continue
+            if len(claim_tokens & content_tokens) >= 2:
+                kept.append(eid)
+        return kept

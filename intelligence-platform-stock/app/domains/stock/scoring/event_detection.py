@@ -264,6 +264,7 @@ class EventIntelligenceEngine:
         """
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         now = datetime.now(timezone.utc)
+        min_relevance = get_stock_config().MIN_EVENT_RELEVANCE
 
         result = await self.session.execute(
             select(News, CompanyNews)
@@ -276,6 +277,14 @@ class EventIntelligenceEngine:
 
         events: list[MarketEvent] = []
         for news, cn in rows:
+            # Gate on link quality: weak company↔news links (passing
+            # content mentions) previously spawned phantom events for the
+            # company — e.g. generic ETF roundups classified as
+            # DIVIDEND_CHANGE. 1.0 = provider ticker link, 0.85 = headline
+            # name match; anything weaker is not about this company.
+            if (cn.relevance_score or 0.0) < min_relevance:
+                continue
+
             event_type = classify_event(news.title, news.summary)
             if event_type == "OTHER":
                 continue

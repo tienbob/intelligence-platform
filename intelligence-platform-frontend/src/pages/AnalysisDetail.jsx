@@ -217,7 +217,7 @@ export default function AnalysisDetail() {
           color={data.risk_score > 60 ? 'error' : data.risk_score > 30 ? 'secondary' : 'tertiary'}
         />
         <MetricTile
-          label="Confidence"
+          label="Data Confidence"
           value={data.confidence != null ? `${(data.confidence * 100).toFixed(0)}%` : '—'}
           icon="verified"
           color="secondary"

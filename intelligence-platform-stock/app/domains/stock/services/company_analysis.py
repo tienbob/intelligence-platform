@@ -61,16 +61,16 @@ class AnalysisExecutionResult:
     evidence_package: dict[str, Any]
 
 
-def _safe_float(v: Any) -> float | None:
-    """Coerce an LLM-supplied numeric-ish value to float (DB column is Float)."""
+def _claim_value(v: Any) -> str | None:
+    """Persist the LLM-supplied claim value verbatim (DB column is String).
+
+    Claim values are not always numeric — e.g. ``ceo_transition: "John
+    Ternus"`` — so the column stores the raw value; numeric values keep
+    their natural string form ("36.89").
+    """
     if v is None:
         return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    try:
-        return float(str(v).replace(",", "").replace("$", "").replace("%", ""))
-    except (ValueError, TypeError):
-        return None
+    return str(v)
 
 
 class CompanyAnalysisService:
@@ -208,7 +208,7 @@ class CompanyAnalysisService:
                     source_type=source.get("type", ""),
                     source_name=source.get("source", ""),
                     metric=source.get("metric"),
-                    value=_safe_float(source.get("value")),
+                    value=_claim_value(source.get("value")),
                     period=source.get("period"),
                 )
             )

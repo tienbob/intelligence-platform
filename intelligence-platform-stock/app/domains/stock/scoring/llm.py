@@ -160,6 +160,25 @@ class LLMService:
             logger.error("LLM output validation failed: %s", exc)
             raise
 
+        # Phase 4b: Citation-support check — the validator proves cited IDs
+        # exist; this proves the cited content can plausibly back the claim.
+        # LLMs occasionally cite a valid-but-unrelated document from the
+        # evidence set (e.g. a fundamentals claim citing an unrelated news
+        # article); drop those citations rather than assert false links.
+        if evidence_attributor is not None:
+            for item in result.get("causes", []):
+                if not item.get("evidence_ids"):
+                    continue
+                supported = evidence_attributor.filter_supported_evidence_ids(item)
+                dropped = [eid for eid in item["evidence_ids"] if eid not in supported]
+                if dropped:
+                    logger.warning(
+                        "Dropped unsupported evidence citation(s) %s for claim: %s",
+                        dropped,
+                        (item.get("cause") or item.get("claim") or "")[:80],
+                    )
+                item["evidence_ids"] = supported
+
         # Phase 5: Evidence attribution (Section 32) — attach the evidence
         # package backing whichever `evidence_ids` the LLM cited. The valid
         # ID list was already injected into `context` above, before the call.

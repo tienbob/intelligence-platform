@@ -157,4 +157,24 @@ All three items from the first re-audit are now fixed:
 
 The user-scoping UX loop is now complete and coherent: **login → run analysis → watch job (cancel if active) → view deep analysis → see it surface in Opportunities (with your own score breakdown + deep-analysis link) → filter opportunities → act on them** — with readable errors at every step, sessions that recover silently instead of dumping the user mid-task, keyboard-accessible score breakdowns, and navigation that works at every viewport.
 
+---
+
+## 7. Validation-Report Fixes (2026-09-29, third round)
+
+Issues found while validating the live AAPL analysis payload (`a5f09ef0-…`) — all fixed:
+
+| # | Issue | Fix |
+|---|---|---|
+| 1 | **Data pollution** — AAPL's news/event snapshots contained non-AAPL stories (Meta/Nvidia/ETF roundups) with misclassified event types. Root cause: `_resolve_companies` matched company names as substrings across **full article content**, so any passing mention ("...partnering with Google instead of Apple...") created a link, which then cascaded into event detection and sentiment scoring. | Name matching is now **title-only with word boundaries** (`ingestion/news.py`); event detection gated on link quality via new `MIN_EVENT_RELEVANCE = 0.8` config (1.0 = provider ticker link, 0.85 = headline name match) (`event_detection.py`). |
+| 2 | **Evidence misattribution** — a fundamentals claim cited a valid-but-unrelated news article; the validator only proved the ID existed. | New generic `EvidenceAttributor.filter_supported_evidence_ids` (lexical token-overlap support check, conservative on short/missing content); Stock's `analyze()` Phase 4b drops unsupported citations with a warning log. 4 new framework tests. |
+| 3 | **Claim value divergence** — persisted claims had `value: null` where the LLM provided "John Ternus"; the column was `Float` and `_safe_float` dropped non-numerics. | `analysis_sources.value` column **Float → String(100)** (Rails `20260929000000` + Alembic `0017`, shared-DB dual history); values now persisted verbatim; contract test updated to the new behavior. |
+| 4 | **Confidence semantics** — "Confidence 100%" is a data-completeness proxy, not model certainty. | FE MetricTile relabeled **"Data Confidence"**. |
+| 5 | **Payload bloat** — `_input_context`, duplicated `evidence`/`_evidence`, `_meta`/`_meta_full`, `_score_snapshot`, embedded `source_backed_claims` shipped ~30+ KB of debug context the FE never renders. | `GET /analysis/{id}` now strips underscore-prefixed keys + the duplicated `evidence`/`source_backed_claims` blocks from the response **dict** — everything remains persisted on the DB row for provenance. Regression tests assert the stripping. |
+| 6 | **Always-empty `recommendation.invalidating_conditions`** (hardcoded `[]` while the real conditions lived in `analysis.invalidating_conditions`). | Now passed through from the LLM output; regression test added. |
+
+**Deployment note:** run `rails db:migrate` (API) and `alembic upgrade head` (Python service) — the value-column migration exists in both histories and is safe to run from either (guarded/idempotent).
+
+**Validation:** backend suite **165 passed** (6 new: 4 citation-support framework tests + 2 detail-response regression tests); frontend lint 0 problems; vite build green.
+
+
 

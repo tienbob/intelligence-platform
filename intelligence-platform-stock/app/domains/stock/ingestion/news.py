@@ -10,6 +10,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -100,12 +101,16 @@ class NewsIngestion:
                 seen_ids.add(company.id)
 
         # ---------------------------------------------------------
-        # 2. Name-based matching
+        # 2. Name-based matching — TITLE ONLY, word-boundary.
+        #
+        # The previous full-content substring match linked any article
+        # that merely mentioned a company in passing ("...partnering with
+        # Google instead of Apple..."), polluting company news feeds and
+        # cascading into event detection + sentiment scoring. A company
+        # must be named in the headline to be considered "about" it.
         # ---------------------------------------------------------
 
-        if title or content:
-            text = f"{title or ''} {content or ''}".lower()
-
+        if title:
             result = await self.session.execute(
                 select(Company)
             )
@@ -125,7 +130,7 @@ class NewsIngestion:
                 if (
                     normalized_name
                     and len(normalized_name) > 2
-                    and normalized_name in text
+                    and re.search(rf"\b{re.escape(normalized_name)}\b", title, re.IGNORECASE)
                 ):
                     results.append(
                         (

@@ -84,6 +84,11 @@ class StockConfig(BaseSettings):
     SCORE_WEIGHT_CATALYST: float = 0.10
     SCORE_WEIGHT_RISK: float = 0.15
 
+    # Minimum CompanyNews relevance for a link to spawn a MarketEvent
+    # (1.0 = provider ticker link, 0.85 = headline name match). Prevents
+    # weakly-linked market roundups from creating phantom company events.
+    MIN_EVENT_RELEVANCE: float = 0.8
+
     # ── Portfolio Constraints ────────────────────────────────────
     DEFAULT_MIN_CASH_PCT: float = 0.20
     DEFAULT_MAX_POSITION_WEIGHT: float = 0.15

@@ -273,7 +273,9 @@ class AnalysisSource(Base, TimestampMixin):
     source_type: Mapped[str] = mapped_column(String(50))
     source_name: Mapped[str] = mapped_column(String(100))
     metric: Mapped[str | None] = mapped_column(String(100))
-    value: Mapped[float | None] = mapped_column(Float)
+    # Claim values are not always numeric (e.g. ceo_transition: "John
+    # Ternus") — stored verbatim as strings.
+    value: Mapped[str | None] = mapped_column(String(100))
     period: Mapped[str | None] = mapped_column(String(20))
 
     def __repr__(self) -> str:
