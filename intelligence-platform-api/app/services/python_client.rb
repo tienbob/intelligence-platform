@@ -23,33 +23,48 @@ class PythonClient
     end
   end
 
+  # Upstream response: status + unwrapped body + the small allow-list of
+  # headers the gateway may relay (idempotency/replay metadata, request ids).
+  #
+  # Success status codes used to be discarded (every proxied call rendered 200,
+  # so Python's 201/202 were invisible to clients) and all metadata was
+  # dropped — audit F05.
+  Result = Struct.new(:status, :body, :headers, keyword_init: true)
+  PASS_THROUGH_HEADERS = %w[idempotency-key idempotency-replayed x-request-id].freeze
+
   class << self
-    def get(path, query: {}, body: nil, user: nil)
-      request(:get, path, query: query, user: user)
+    def get(path, query: {}, body: nil, user: nil, extra_headers: {})
+      request(:get, path, query: query, user: user, extra_headers: extra_headers)
     end
 
-    def post(path, body: nil, query: {}, user: nil)
-      request(:post, path, body: body, query: query, user: user)
+    def post(path, body: nil, query: {}, user: nil, extra_headers: {})
+      request(:post, path, body: body, query: query, user: user, extra_headers: extra_headers)
     end
 
-    def put(path, body: nil, query: {}, user: nil)
-      request(:put, path, body: body, query: query, user: user)
+    def put(path, body: nil, query: {}, user: nil, extra_headers: {})
+      request(:put, path, body: body, query: query, user: user, extra_headers: extra_headers)
     end
 
-    def delete(path, body: nil, query: {}, user: nil)
-      request(:delete, path, body: body, query: query, user: user)
+    def delete(path, body: nil, query: {}, user: nil, extra_headers: {})
+      request(:delete, path, body: body, query: query, user: user, extra_headers: extra_headers)
     end
 
-    # Raises PythonError (with status + extracted detail) on non-2xx so the
-    # controller can propagate the correct upstream status code.
-    def request(method, path, body: nil, query: {}, user: nil)
+    # Backwards-compatible helper: returns only the unwrapped body.
+    def request(method, path, **kwargs)
+      request_full(method, path, **kwargs).body
+    end
+
+    # Full result (status + body + relayable headers). Raises PythonError (with
+    # status + extracted detail) on non-2xx so the controller can propagate the
+    # correct upstream status code.
+    def request_full(method, path, body: nil, query: {}, user: nil, extra_headers: {})
       url = "#{Gateway::PYTHON_INTERNAL_URL}/internal#{path}"
       headers = {
         "Content-Type" => "application/json",
         "X-Service-Key" => Gateway::PYTHON_SERVICE_KEY,
         "X-User-Id" => user&.id.to_s,
         "X-User-Role" => user&.role.to_s
-      }
+      }.merge(extra_headers.compact)
 
       request_options = {
         headers: headers,
@@ -74,7 +89,19 @@ class PythonClient
         raise PythonError.new(status, detail || response.body.to_s)
       end
 
-      parse_body(response.body.to_s)
+      Result.new(
+        status: status,
+        body: parse_body(response.body.to_s),
+        headers: relay_headers(response)
+      )
+    end
+
+    # Only the allow-listed upstream headers are relayed to the client.
+    def relay_headers(response)
+      PASS_THROUGH_HEADERS.each_with_object({}) do |name, acc|
+        value = response.headers[name]
+        acc[name.split("-").map(&:capitalize).join("-")] = value if value
+      end
     end
 
     def extract_error_detail(raw)

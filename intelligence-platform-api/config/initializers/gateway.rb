@@ -16,4 +16,23 @@ module Gateway
 
   # ── Auth toggle (mirrors Python AUTH_ENABLED) ─────────────────────
   AUTH_ENABLED         = ENV.fetch("AUTH_ENABLED", "false") == "true"
+
+  # ── Fail-closed production guard (audit S1) ───────────────────────
+  # Never sign user JWTs with a well-known default secret, and never call the
+  # Python service with the dev key, in production. Refuse to boot instead of
+  # failing open (mirrors the guard in the Python app/main.py).
+  if Rails.env.production?
+    _problems = []
+    if JWT_SECRET_KEY.strip.empty? || JWT_SECRET_KEY == "change-me-in-production-change-me-in-production-1234"
+      _problems << "JWT_SECRET_KEY is the known default"
+    end
+    if PYTHON_SERVICE_KEY.strip.empty? || PYTHON_SERVICE_KEY == "dev-service-key-change-me"
+      _problems << "PYTHON_SERVICE_KEY is the known dev default"
+    end
+    _problems << "AUTH_ENABLED must be true" unless AUTH_ENABLED
+    unless _problems.empty?
+      raise "Refusing to boot the gateway in production: #{_problems.join('; ')}. " \
+            "Set real secrets (JWT_SECRET_KEY, PYTHON_SERVICE_KEY) or run outside production."
+    end
+  end
 end

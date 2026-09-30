@@ -152,11 +152,29 @@ module Api
       private
 
       def render_python(method, path, query: {}, body: nil)
-        data = PythonClient.public_send(method, path, query: query, body: body, user: current_user)
-        render json: data, status: :ok
+        result = PythonClient.request_full(
+          method, path, query: query, body: body, user: current_user,
+          extra_headers: idempotency_headers
+        )
+        # Preserve the upstream success status (201/202/204) and relay
+        # idempotency/replay/request-id metadata instead of flattening every
+        # response to 200 with no headers (audit F05).
+        headers = result.headers || {}
+        if result.status == 204
+          head :no_content, headers: headers
+        else
+          render json: result.body, status: result.status, headers: headers
+        end
       rescue PythonClient::PythonError => e
         # Propagate the upstream status code (e.g. 404 → 404) and detail.
         render json: { detail: e.body }, status: e.status
+      end
+
+      # Forward a caller-supplied Idempotency-Key so Python can deduplicate
+      # retried paid work (audit F04). Only this one header is relayed.
+      def idempotency_headers
+        key = request.headers["Idempotency-Key"]
+        key.present? ? { "Idempotency-Key" => key.to_s } : {}
       end
 
       # Parse the request body as JSON (for POST/PUT pass-through).
