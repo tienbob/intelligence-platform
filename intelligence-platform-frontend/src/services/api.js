@@ -17,19 +17,24 @@ async function request(url, options = {}, retried = false) {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
+  // Spread options first so a caller-supplied `headers` (e.g. an
+  // Idempotency-Key) cannot silently replace the merged Content-Type /
+  // Authorization headers (audit Q07).
   const res = await fetch(`${BASE_URL}${url}`, {
-    headers,
     ...options,
+    headers,
   });
   // Session expired (401) on a protected endpoint → try one silent token
   // refresh, then retry the request once. Only if the refresh fails do we
   // clear tokens and redirect (avoids redirect loops on auth endpoints).
   if (res.status === 401 && !isAuthRoute(url) && !retried) {
+    // A response from an old account must not refresh or clear a newer session.
+    if (getStoredToken() !== token) throw new Error('Session changed. Please retry.');
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return request(url, options, true);
     }
-    if (!window.location.pathname.startsWith('/login')) {
+    if (getStoredToken() === token && !window.location.pathname.startsWith('/login')) {
       clearTokens();
       window.location.href = '/login?expired=1';
     }
@@ -107,9 +112,24 @@ export const getMarketOverview = () => request('/market/overview');
 export const getMarketIndices = () => request('/market/indices');
 export const getTopMovers = () => request('/market/top-movers');
 
+// ── Idempotency (audit F04) ──────────────────────────────────────
+// A key per create attempt lets the gateway/Python deduplicate a retried
+// request instead of queueing a second paid analysis. The merged headers in
+// `request()` guarantee the Authorization header survives alongside it.
+function newIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `mi-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 // Analysis
 export const createCompanyAnalysis = (body) =>
-  request('/analysis/company', { method: 'POST', body: JSON.stringify(body) });
+  request('/analysis/company', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'Idempotency-Key': newIdempotencyKey() },
+  });
 export const getAnalysis = (id) => request(`/analysis/${id}`);
 export const cancelAnalysis = (id) => request(`/analysis/${id}/cancel`, { method: 'POST' });
 export const deleteAnalysis = (id) => request(`/analysis/${id}`, { method: 'DELETE' });

@@ -1,43 +1,28 @@
-import { getStoredRefreshToken, storeTokens } from './token';
+import { getStoredRefreshToken, getSessionGeneration, storeTokens } from './token.js';
 
-// Single-flight access-token refresh: when several requests hit 401 at the
-// same moment, they share one /auth/refresh call instead of racing each
-// other (which can burn the refresh token).
 let inFlight = null;
-
-/**
- * Attempt a silent token refresh.
- * @returns {Promise<string|null>} the new access token, or null on failure.
- */
 export async function refreshAccessToken() {
   const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) {
-    return null;
-  }
-  if (!inFlight) {
-    inFlight = (async () => {
-      try {
-        const res = await fetch('/api/v1/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        });
-        if (!res.ok) {
-          return null;
-        }
-        const json = await res.json();
-        const data = json?.data || json;
-        if (!data?.access_token) {
-          return null;
-        }
-        storeTokens(data.access_token, data.refresh_token);
-        return data.access_token;
-      } catch {
-        return null;
-      } finally {
-        inFlight = null;
-      }
-    })();
-  }
-  return inFlight;
+  if (!refreshToken) return null;
+  const generation = getSessionGeneration();
+  if (inFlight?.key === refreshToken && inFlight.generation === generation) return inFlight.promise;
+  const flight = { key: refreshToken, generation };
+  flight.promise = (async () => {
+    try {
+      const res = await fetch('/api/v1/auth/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      const data = json?.data || json;
+      // Storage comparison also covers logout/account changes in another tab.
+      if (!data?.access_token || generation !== getSessionGeneration() || getStoredRefreshToken() !== refreshToken) return null;
+      storeTokens(data.access_token, data.refresh_token);
+      return data.access_token;
+    } catch { return null; }
+    finally { if (inFlight === flight) inFlight = null; }
+  })();
+  inFlight = flight;
+  return flight.promise;
 }
