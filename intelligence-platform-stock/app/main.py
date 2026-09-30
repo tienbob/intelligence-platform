@@ -15,20 +15,52 @@ To add a new domain:
 
 from __future__ import annotations
 
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.core.observability import RequestIDMiddleware, get_metrics_snapshot
+from app.core.rate_limit_middleware import RateLimitMiddleware
+from app.core.redis_cache import get_redis_cache
 from app.core.response_envelope import ResponseEnvelopeMiddleware
+from app.core.security import IdempotencyReplay
 from app.core.versioning import ARCHITECTURE_VERSION, PIPELINE_VERSION
 from app.intelligence.registry import get_registry
 
 settings = get_settings()
 setup_logging()
+
+# ── Fail-closed production guard (audit S1) ─────────────────────
+# In production the internal API must never be reachable with an unset (or
+# well-known dev) service key, and user JWTs must never be verified with the
+# default secret. Refuse to boot instead of failing open.
+_DEV_SERVICE_KEY = "dev-service-key-change-me"
+_DEFAULT_JWT_SECRET = "change-me-in-production-change-me-in-production-1234"
+
+if settings.ENVIRONMENT == "production":
+    _secret_problems: list[str] = []
+    if not settings.INTERNAL_SERVICE_KEY or settings.INTERNAL_SERVICE_KEY == _DEV_SERVICE_KEY:
+        _secret_problems.append(
+            "INTERNAL_SERVICE_KEY is unset or the known dev default "
+            f"({_DEV_SERVICE_KEY}) — the /internal API would be open"
+        )
+    if settings.AUTH_ENABLED and (
+        not settings.JWT_SECRET_KEY or settings.JWT_SECRET_KEY == _DEFAULT_JWT_SECRET
+    ):
+        _secret_problems.append(
+            "AUTH_ENABLED=true but JWT_SECRET_KEY is unset or the known default"
+        )
+    if _secret_problems:
+        raise RuntimeError(
+            "Refusing to start with ENVIRONMENT=production: "
+            + "; ".join(_secret_problems)
+            + ". Set real secrets, or set ENVIRONMENT=development for local development."
+        )
 
 
 @asynccontextmanager
@@ -52,6 +84,14 @@ async def lifespan(app: FastAPI):
     scheduler = create_scheduler()
     scheduler.start()
     logger.info("Background scheduler started with %d jobs", len(scheduler.get_jobs()))
+
+    from app.core.security import _idempotency_redis
+
+    if get_redis_cache().available:
+        logger.info("Redis cache enabled — idempotency is durable across workers")
+    else:
+        logger.info("Redis unavailable — idempotency uses the in-memory fallback")
+    _idempotency_redis()  # warm the idempotency handle early
 
     yield
 
@@ -77,7 +117,24 @@ app.add_middleware(
 )
 
 app.add_middleware(RequestIDMiddleware)
+# Rate limiting runs INSIDE the envelope middleware (added first → sits
+# closer to the app) so its 429 responses get wrapped in the standard
+# {"error": ...} shape with Retry-After preserved (audit S03).
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(ResponseEnvelopeMiddleware)
+
+
+# ── Idempotency replay (Architecture §101, audit F04) ───────────
+# A replay returns the ORIGINAL status + payload — re-wrapped by the envelope
+# middleware as {"data": ...} — plus the replay headers, so a retry is
+# indistinguishable from the first response instead of becoming an error body.
+@app.exception_handler(IdempotencyReplay)
+async def _idempotency_replay_handler(_request: Request, exc: IdempotencyReplay):
+    return JSONResponse(
+        content=exc.body,
+        status_code=exc.status_code,
+        headers={"Idempotency-Key": exc.key, "Idempotency-Replayed": "true"},
+    )
 
 # ── Domain Routes (auto-discovered) ─────────────────────────────
 #
@@ -150,7 +207,7 @@ async def health_live():
 
 
 @app.get("/health/ready")
-async def health_ready():
+async def health_ready(response: Response):
     """Readiness check — database and required services available."""
     from app.core.database import engine
 
@@ -160,6 +217,7 @@ async def health_ready():
         db_status = "ok"
     except Exception:
         db_status = "degraded"
+        response.status_code = 503
 
     return {
         "status": "ok" if db_status == "ok" else "degraded",
@@ -174,8 +232,19 @@ async def health():
 
 
 @app.get("/metrics")
-async def metrics_endpoint():
-    """Metrics endpoint."""
+async def metrics_endpoint(request: Request):
+    """Metrics snapshot (key-gated outside development).
+
+    Labels are route-templated so no resource ids leak (audit S02), but the
+    snapshot still exposes traffic patterns — outside development it requires
+    the internal service key, and nginx no longer proxies this path at all
+    (audit S02 remainder).
+    """
+    if settings.ENVIRONMENT == "production":
+        expected = settings.INTERNAL_SERVICE_KEY or settings.APP_API_KEY
+        provided = request.headers.get("X-Service-Key") or request.headers.get("X-API-Key")
+        if not expected or not provided or not secrets.compare_digest(provided, expected):
+            raise HTTPException(status_code=401, detail="Metrics require the internal service key")
     return get_metrics_snapshot()
 
 

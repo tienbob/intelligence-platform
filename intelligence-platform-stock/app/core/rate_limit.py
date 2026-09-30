@@ -1,15 +1,17 @@
 """
 Rate limiting (Phase 8, Section 86).
 
-Implements a sliding-window in-memory rate limiter with per-route limits.
+Shared Redis sliding windows with an in-memory fallback for explicit development.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import math
+import secrets
 import time
 from collections import defaultdict, deque
-from typing import Any
 
 from fastapi import HTTPException, Request, status
 
@@ -51,7 +53,7 @@ class SlidingWindowRateLimiter:
                 window.popleft()
 
             if len(window) >= max_requests:
-                retry_after = int(self.window_seconds - (now - window[0]))
+                retry_after = max(1, math.ceil(self.window_seconds - (now - window[0])))
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Rate limit exceeded. Try again in {retry_after}s.",
@@ -66,28 +68,79 @@ class SlidingWindowRateLimiter:
             self._requests[key].clear()
 
 
-# Global rate limiter instance
-rate_limiter = SlidingWindowRateLimiter(
-    default_limit=settings.RATE_LIMIT_DEFAULT_PER_MINUTE,
-    window_seconds=60,
+class RedisRateLimiter:
+    """Atomic shared sliding window, using Redis time rather than worker clocks."""
+
+    SCRIPT = """
+    local t = redis.call('TIME')
+    local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+    local window = tonumber(ARGV[1])
+    redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - window)
+    if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then
+      local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+      return math.max(1, math.ceil((tonumber(oldest[2]) + window - now) / 1000))
+    end
+    redis.call('ZADD', KEYS[1], now, ARGV[3])
+    redis.call('PEXPIRE', KEYS[1], window)
+    return 0
+    """
+
+    def __init__(self, url, default_limit=60, window_seconds=60):
+        self.url = url
+        self.default_limit = default_limit
+        self.window_seconds = window_seconds
+        self.client = None
+
+    def connection(self):
+        if self.client is None:
+            from redis.asyncio import Redis
+            self.client = Redis.from_url(self.url, socket_timeout=2, socket_connect_timeout=2)
+        return self.client
+
+    def storage_key(self, key):
+        return 'mi:rate:' + hashlib.sha256(key.encode()).hexdigest()
+
+    async def check(self, key, limit=None):
+        if not settings.RATE_LIMIT_ENABLED:
+            return
+        from redis.exceptions import RedisError
+        try:
+            retry = await self.connection().eval(
+                self.SCRIPT, 1, self.storage_key(key), self.window_seconds * 1000,
+                limit or self.default_limit, secrets.token_hex(16),
+            )
+        except RedisError as exc:
+            # Paid work must not bypass its shared budget during an outage.
+            raise HTTPException(503, 'Rate-limit service unavailable. Please retry.',
+                                headers={'Retry-After': '5'}) from exc
+        if retry:
+            raise HTTPException(429, 'Rate limit exceeded.', headers={'Retry-After': str(retry)})
+
+    async def reset(self, key):
+        await self.connection().delete(self.storage_key(key))
+
+
+# Redis is independent of the optional provider-cache feature flag.
+rate_limiter = (
+    RedisRateLimiter(settings.REDIS_URL, settings.RATE_LIMIT_DEFAULT_PER_MINUTE)
+    if settings.REDIS_URL else
+    SlidingWindowRateLimiter(settings.RATE_LIMIT_DEFAULT_PER_MINUTE)
 )
 
 
 def get_client_key(request: Request) -> str:
-    """Extract a client identifier from the request."""
-    # Use X-Forwarded-For if behind a proxy, otherwise client host
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    # Trust gateway identity only with the service credential. Forwarded IP
+    # headers from arbitrary callers must not permit changing the quota key.
+    supplied = request.headers.get('X-Service-Key', '')
+    trusted = bool(settings.INTERNAL_SERVICE_KEY) and secrets.compare_digest(
+        supplied, settings.INTERNAL_SERVICE_KEY or '')
+    user_id = request.headers.get('X-User-Id')
+    if trusted and user_id and user_id.isdecimal():
+        return f'user:{user_id}'
+    return request.client.host if request.client else 'unknown'
 
 
-async def rate_limit(
-    request: Request,
-    limit: int | None = None,
-    scope: str = "default",
-) -> None:
-    """FastAPI dependency for rate limiting."""
-    client = get_client_key(request)
-    key = f"{client}:{scope}"
-    await rate_limiter.check(key, limit)
+async def rate_limit(request: Request, limit: int | None = None, scope: str = 'default') -> None:
+    if settings.RATE_LIMIT_ENABLED and not settings.REDIS_URL and settings.ENVIRONMENT != 'development':
+        raise HTTPException(503, 'Shared rate limiting is not configured.', headers={'Retry-After': '5'})
+    await rate_limiter.check(f'{get_client_key(request)}:{scope}', limit)

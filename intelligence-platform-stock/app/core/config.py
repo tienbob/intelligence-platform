@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "Intelligence Platform"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
+    # Deployment environment. "production" (the default) enables the
+    # fail-closed startup guard in app/main.py: unset/known-default secrets
+    # refuse to boot instead of silently failing open. Local dev must set
+    # ENVIRONMENT=development explicitly (docker-compose does).
+    ENVIRONMENT: str = "production"
     API_V1_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["*"])
 
@@ -76,11 +81,15 @@ class Settings(BaseSettings):
     AUTH_ENABLED: bool = False
 
     # ── Rate Limiting ────────────────────────────────────────────
-    RATE_LIMIT_ENABLED: bool = False
+    RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_DEFAULT_PER_MINUTE: int = 60
     RATE_LIMIT_ANALYSIS_PER_MINUTE: int = 10
     RATE_LIMIT_LLM_PER_MINUTE: int = 5
     RATE_LIMIT_PORTFOLIO_PER_MINUTE: int = 20
+    # NOTE: these limits are enforced by app.core.rate_limit_middleware,
+    # which is mounted in app/main.py. Set RATE_LIMIT_ENABLED=false only in
+    # local development if the quota gets in your way (audit S03: the limiter
+    # previously existed but was never wired, so limits were effectively off).
 
     # ── Observability ────────────────────────────────────────────
     METRICS_ENABLED: bool = True

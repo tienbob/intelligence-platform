@@ -28,11 +28,9 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable
+import json
 
-from fastapi import Request, Response
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Scope, Receive, Send, Message
 
 from app.core.config import get_settings
 from app.core.observability import get_request_id
@@ -61,79 +59,74 @@ def _is_excluded(path: str) -> bool:
     return False
 
 
-class ResponseEnvelopeMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware that wraps all API responses in a standard envelope.
+class ResponseEnvelopeMiddleware:
+    """Wrap JSON at the public ASGI boundary; pass other streams through."""
 
-    Architecture §71: All API responses use {"data": {...}, "meta": {...}}.
-    Error responses use {"error": {"code": ..., "message": ...}, "meta": {...}}.
-    """
+    def __init__(self, app: ASGIApp):
+        self.app = app
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Skip excluded paths
-        if _is_excluded(request.url.path):
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or _is_excluded(scope["path"]):
+            return await self.app(scope, receive, send)
 
-        start = time.monotonic()
-        response = await call_next(request)
-        elapsed_ms = round((time.monotonic() - start) * 1000, 2)
+        started = time.monotonic()
+        response_start = None
+        chunks = []
+        wrap = False
 
-        # Only wrap JSON responses
-        content_type = response.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            return response
-
-        # Read the original response body
-        body = b""
-        async for chunk in response.__dict__.get("body_iterator", []):
-            body += chunk
-
-        if not body:
-            return response
-
-        import json
-
-        try:
-            original = json.loads(body)
-        except (json.JSONDecodeError, TypeError):
-            return response
-
-        meta = {
-            "request_id": get_request_id(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": settings.APP_VERSION,
-            "elapsed_ms": elapsed_ms,
-        }
-
-        # Check if this is an error response (status >= 400)
-        if response.status_code >= 400:
-            # Convert FastAPI's flat {"detail": "..."} to Architecture §71 error format
-            detail = original.get("detail", "An error occurred")
-            if isinstance(detail, list):
-                # FastAPI validation errors
-                detail = "; ".join(
-                    d.get("msg", str(d)) for d in detail if isinstance(d, dict)
+        async def envelope_send(message: Message):
+            nonlocal response_start, wrap
+            if message["type"] == "http.response.start":
+                headers = dict(message.get("headers", []))
+                wrap = (
+                    b"application/json" in headers.get(b"content-type", b"").lower()
+                    and b"content-encoding" not in headers
+                    and message["status"] not in {204, 304}
+                    and scope["method"] != "HEAD"
                 )
-            wrapped = {
-                "error": {
-                    "code": str(response.status_code),
-                    "message": str(detail),
-                },
-                "meta": meta,
-            }
-        else:
-            wrapped = {
-                "data": original,
-                "meta": meta,
-            }
+                if wrap:
+                    response_start = message
+                else:
+                    await send(message)
+                return
+            if message["type"] != "http.response.body" or not wrap:
+                await send(message)
+                return
 
-        # Strip content-length since the wrapped body is larger
-        safe_headers = {
-            k: v for k, v in response.headers.items()
-            if k.lower() != "content-length"
-        }
-        return JSONResponse(
-            content=wrapped,
-            status_code=response.status_code,
-            headers=safe_headers,
-        )
+            chunks.append(message.get("body", b""))
+            if message.get("more_body", False):
+                return
+            body = b"".join(chunks)
+            try:
+                original = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                # Malformed or empty upstream JSON must remain byte-for-byte
+                # intact, rather than returning an already-consumed iterator.
+                await send(response_start)
+                await send({**message, "body": body})
+                return
+
+            meta = {
+                "request_id": get_request_id(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": settings.APP_VERSION,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+            }
+            status = response_start["status"]
+            if status >= 400:
+                detail = original.get("detail", "An error occurred") if isinstance(original, dict) else original
+                if isinstance(detail, list):
+                    detail = "; ".join(d.get("msg", str(d)) if isinstance(d, dict) else str(d) for d in detail)
+                wrapped = {"error": {"code": str(status), "message": str(detail)}, "meta": meta}
+            else:
+                wrapped = {"data": original, "meta": meta}
+            body = json.dumps(wrapped, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+            # Preserve duplicate headers such as Set-Cookie. Validators refer
+            # to the original representation and must not survive rewriting.
+            headers = [(key, value) for key, value in response_start.get("headers", [])
+                       if key.lower() not in {b"content-length", b"etag", b"content-md5"}]
+            headers.append((b"content-length", str(len(body)).encode()))
+            await send({**response_start, "headers": headers})
+            await send({**message, "body": body})
+
+        await self.app(scope, receive, envelope_send)

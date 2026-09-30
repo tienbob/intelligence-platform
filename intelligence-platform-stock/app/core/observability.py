@@ -10,6 +10,7 @@ Implements:
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections import defaultdict
@@ -34,6 +35,29 @@ def get_request_id() -> str:
     return request_id_var.get()
 
 
+# Request paths contain literal resource identifiers (analysis UUIDs, numeric
+# ids). Metrics labels must not disclose which resources were accessed and must
+# not grow without bound as distinct ids accumulate (audit S02/O07), so paths
+# are reduced to route templates before being recorded.
+_UUID_SEGMENT_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_NUMERIC_SEGMENT_RE = re.compile(r"^[0-9]+$")
+
+
+def normalize_endpoint(path: str) -> str:
+    """Reduce a request path to a low-cardinality route template.
+
+    ``/api/v1/analysis/9f1c8e2a-...`` → ``/api/v1/analysis/{id}``.
+    """
+    return "/".join(
+        "{id}"
+        if _UUID_SEGMENT_RE.match(segment) or _NUMERIC_SEGMENT_RE.match(segment)
+        else segment
+        for segment in path.split("/")
+    )
+
+
 class MetricsRegistry:
     """
     In-memory metrics registry.
@@ -47,7 +71,7 @@ class MetricsRegistry:
 
     def __init__(self):
         self._request_counts: dict[str, int] = defaultdict(int)
-        self._request_latencies: dict[str, list[float]] = defaultdict(list)
+        self._request_latencies: dict[str, list[float]] = defaultdict(lambda: [0.0, 0])
         self._error_counts: dict[str, int] = defaultdict(int)
         self._provider_calls: dict[str, int] = defaultdict(int)
         self._provider_errors: dict[str, int] = defaultdict(int)
@@ -55,10 +79,16 @@ class MetricsRegistry:
         self._llm_tokens: int = 0
 
     def record_request(self, endpoint: str, status_code: int, latency_ms: float) -> None:
-        """Record a request with its status and latency."""
+        """Record a request with its status and latency.
+
+        Labels are route-templated so telemetry carries no resource ids
+        (audit S02) and label cardinality stays bounded (audit O07).
+        """
+        endpoint = normalize_endpoint(endpoint)
         key = f"{endpoint}:{status_code}"
         self._request_counts[key] += 1
-        self._request_latencies[endpoint].append(latency_ms)
+        self._request_latencies[endpoint][0] += latency_ms
+        self._request_latencies[endpoint][1] += 1
         if status_code >= 500:
             self._error_counts[endpoint] += 1
 
@@ -83,7 +113,7 @@ class MetricsRegistry:
             "llm_calls": self._llm_calls,
             "llm_tokens": self._llm_tokens,
             "avg_latency_ms": {
-                endpoint: sum(lats) / len(lats) if lats else 0
+                endpoint: lats[0] / lats[1] if lats[1] else 0
                 for endpoint, lats in self._request_latencies.items()
             },
         }
@@ -110,11 +140,11 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         except Exception:
             # Record error metrics even on unhandled exceptions
             latency_ms = (time.monotonic() - start) * 1000
-            metrics.record_request(request.url.path, 500, latency_ms)
+            metrics.record_request(getattr(request.scope.get("route"), "path", "unmatched"), 500, latency_ms)
             raise
 
         latency_ms = (time.monotonic() - start) * 1000
-        metrics.record_request(request.url.path, response.status_code, latency_ms)
+        metrics.record_request(getattr(request.scope.get("route"), "path", "unmatched"), response.status_code, latency_ms)
 
         response.headers[settings.REQUEST_ID_HEADER] = request_id
         return response
