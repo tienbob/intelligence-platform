@@ -53,6 +53,10 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/intelligence_stock
       REDIS_URL: redis://redis:6379/0
+      # Local dev compose: disables the fail-closed production secret guard
+      # (app/main.py). Deployments must set ENVIRONMENT=production with real
+      # INTERNAL_SERVICE_KEY / JWT secrets.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       # Explicit domain enablement (Gate 0): never rely on default-discovery
       # silently enabling packs that merely live on disk (e.g. hr).
       INTELLIGENCE_DOMAINS: ${INTELLIGENCE_DOMAINS:-stock}
@@ -68,7 +72,26 @@ services:
         condition: service_healthy
       python-migrate:
         condition: service_completed_successfully
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build: ./intelligence-platform-stock
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/intelligence_stock
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      INTERNAL_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
+    depends_on:
+      python-migrate:
+        condition: service_completed_successfully
+    command: python -m app.workers.jobs
+    restart: unless-stopped
 
   # ── Rails API Gateway ─────────────────────────────────────────
   rails-migrate:
@@ -81,6 +104,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      python-migrate:
+        condition: service_completed_successfully
     command: bash bin/migrate.sh
 
   rails:
@@ -101,7 +126,7 @@ services:
       db:
         condition: service_healthy
       python:
-        condition: service_started
+        condition: service_healthy
       rails-migrate:
         condition: service_completed_successfully
     command: bundle exec puma -C config/puma.rb
