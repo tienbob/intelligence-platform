@@ -41,7 +41,7 @@ function ScoreComponents({ opp, onNavigate }) {
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs text-on-surface-variant uppercase tracking-wider data-font">Score components</span>
           <span className="text-[10px] text-on-surface-variant data-font">
-            {hasAnalysis ? 'Deep AI Analysis' : 'Screening model'}
+            Screening model
             {opp.scoring_version ? ` · v${opp.scoring_version}` : ''}
             {opp.score_timestamp ? ` · ${formatDate(opp.score_timestamp)}` : ''}
           </span>
@@ -62,6 +62,15 @@ function ScoreComponents({ opp, onNavigate }) {
             <p className="text-xs text-on-surface-variant">No component breakdown available for this score.</p>
           )}
         </div>
+        {hasAnalysis && (
+          <div className="mt-3 pt-3 border-t border-outline-variant text-[10px] text-on-surface-variant data-font flex items-center justify-between gap-3">
+            <span>Deep AI Analysis</span>
+            <span>
+              {opp.analysis_score != null ? `score ${Number(opp.analysis_score).toFixed(1)}` : 'score —'}
+              {opp.analysis_timestamp ? ` · ${formatDate(opp.analysis_timestamp)}` : ''}
+            </span>
+          </div>
+        )}
         <div className="mt-4 pt-3 border-t border-outline-variant flex items-center justify-between gap-3">
           <div className="text-[10px] text-on-surface-variant data-font">
             {opp.scoring_model ? opp.scoring_model : 'investment_score_v1'}
@@ -209,7 +218,7 @@ export default function Opportunities() {
                   <thead>
                     <tr className="bg-surface-container-highest border-b border-outline-variant">
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Ticker</th>
-                      <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">AI Score</th>
+                      <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Screening Score</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Risk</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Volatility</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Sector</th>
@@ -243,7 +252,7 @@ export default function Opportunities() {
                               </div>
                             </td>
                             <td className="py-2 px-4">
-                              <span className={opp.risk_score > 60 ? 'text-error' : opp.risk_score > 30 ? 'text-secondary' : 'text-tertiary'}>
+                              <span className={opp.risk_score == null ? 'text-on-surface-variant' : opp.risk_score > 60 ? 'text-error' : opp.risk_score > 30 ? 'text-secondary' : 'text-tertiary'}>
                                 {opp.risk_score != null ? Number(opp.risk_score).toFixed(0) : '—'}
                               </span>
                             </td>

@@ -1,3 +1,4 @@
+import { startPolling } from '../services/polling';
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getAnalysis, createCompanyAnalysis, cancelAnalysis, deleteAnalysis } from '../services/api';
@@ -22,34 +23,24 @@ export default function AnalysisDetail() {
   const loading = !current;
 
   useEffect(() => {
-    let cancelled = false;
-    let timeout;
-
-    async function load() {
+    async function load(active) {
       let terminal = false;
       try {
         const data = await getAnalysis(analysisId);
-        if (cancelled) return;
+        if (!active()) return;
         setResult({ id: analysisId, data, error: null });
         terminal = ['completed', 'failed', 'cancelled'].includes(data.status);
       } catch (e) {
-        if (cancelled) return;
+        if (!active()) return;
         setResult((previous) => ({
           id: analysisId,
           data: previous?.id === analysisId ? previous.data : null,
           error: e.message || 'Failed to load analysis',
         }));
       }
-      if (!cancelled && !terminal && REFRESH_ANALYSIS_DETAIL_MS > 0) {
-        timeout = setTimeout(load, REFRESH_ANALYSIS_DETAIL_MS);
-      }
+      return !terminal;
     }
-
-    load();
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
+    return startPolling(load, REFRESH_ANALYSIS_DETAIL_MS);
   }, [analysisId, retryVersion]);
 
   const toast = useToast();

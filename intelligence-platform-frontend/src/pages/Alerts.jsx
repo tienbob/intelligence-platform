@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getAlerts, createAlert, markAlertRead } from '../services/api';
+import { notifyAlertsChanged } from '../services/alertsSignal';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
 
@@ -7,6 +8,10 @@ export default function Alerts() {
   const toast = useToast();
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
+  // Explicit Unread/All view: dismissal writes is_read=true server-side, so
+  // reloading the unread feed keeps dismissed rows hidden instead of
+  // resurrecting them (audit F03).
+  const [view, setView] = useState('unread');
   const [showCreate, setShowCreate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({
@@ -16,22 +21,27 @@ export default function Alerts() {
     message: '',
   });
 
-  async function loadAlerts() {
+  const loadAlerts = useCallback(async () => {
     try {
-      const data = await getAlerts({ limit: 50 });
+      const params = { limit: 50 };
+      if (view === 'unread') params.unread_only = true;
+      const data = await getAlerts(params);
       setAlerts(data?.alerts || []);
       setError(null);
     } catch (e) {
       setError(e.message || 'Failed to load alerts');
     }
-  }
+  }, [view]);
 
-  useEffect(() => { loadAlerts(); }, []);
+  useEffect(() => { loadAlerts(); }, [loadAlerts]);
 
-  async function handleDismiss(alertId) {
+  async function handleDismiss(alert) {
+    if (!alert?.can_manage) return;
     try {
-      await markAlertRead(alertId);
-      setAlerts((prev) => prev.filter((a) => a.id !== alertId));
+      await markAlertRead(alert.id);
+      setAlerts((prev) => prev.filter((a) => a.id !== alert.id));
+      // Keep the TopNav unread badge consistent with the feed (audit F03).
+      notifyAlertsChanged();
       toast('Alert dismissed', 'success');
     } catch {
       toast('Failed to dismiss alert', 'error');
@@ -53,6 +63,7 @@ export default function Alerts() {
       toast('Alert created', 'success');
       setForm({ ticker: '', alert_type: 'price_alert', severity: 'medium', message: '' });
       setShowCreate(false);
+      notifyAlertsChanged();
       await loadAlerts();
     } catch (err) {
       toast(err.message || 'Failed to create alert', 'error');
@@ -71,6 +82,23 @@ export default function Alerts() {
           </p>
         </div>
         <div className="flex gap-2">
+          <div role="group" aria-label="Alert view" className="flex rounded border border-outline-variant overflow-hidden">
+            {['unread', 'all'].map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={view === option}
+                className={`px-3 py-2 text-xs font-semibold capitalize transition-colors ${
+                  view === option
+                    ? 'bg-surface-container-highest text-on-surface'
+                    : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
+                }`}
+                onClick={() => setView(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
           <button
             className="btn-primary flex items-center gap-2"
             onClick={() => setShowCreate(!showCreate)}
@@ -203,16 +231,20 @@ export default function Alerts() {
                         {alert.severity || '—'}
                       </span>
                     </td>
-                    <td className="py-2 px-4 text-on-surface-variant max-w-md truncate">
+                    <td className="py-2 px-4 text-on-surface-variant max-w-md whitespace-normal break-words [overflow-wrap:anywhere]">
                       {alert.message || '—'}
                     </td>
                     <td className="py-2 px-4 text-right">
-                      <button
-                        className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 bg-surface-container-highest border border-outline-variant hover:border-secondary hover:text-secondary text-on-surface rounded text-xs transition-colors"
-                        onClick={(e) => { e.stopPropagation(); handleDismiss(alert.id); }}
-                      >
-                        Dismiss
-                      </button>
+                      {alert.can_manage ? (
+                        <button
+                          className="px-2 py-1 bg-surface-container-highest border border-outline-variant hover:border-secondary hover:text-secondary text-on-surface rounded text-xs transition-colors focus-visible:outline-2 focus-visible:outline-secondary"
+                          onClick={(e) => { e.stopPropagation(); handleDismiss(alert); }}
+                        >
+                          Dismiss
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-on-surface-variant/70 whitespace-nowrap">Read only</span>
+                      )}
                     </td>
                   </tr>
                 ))

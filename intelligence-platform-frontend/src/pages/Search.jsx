@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getCompanies, getStockQuote } from '../services/api';
 
 export default function Search() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const initialQuery = searchParams.get('q') || '';
   const [query, setQuery] = useState(initialQuery);
@@ -11,49 +11,48 @@ export default function Search() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState(null);
 
-  async function handleSearch(e) {
-    e?.preventDefault();
-    if (!query.trim()) return;
-    setSearching(true);
-    setError(null);
-    try {
-      // Try stock quote first — this triggers auto-ingestion on the backend
-      // if the ticker isn't tracked yet, so searching self-populates the platform.
-      const upperQuery = query.trim().toUpperCase();
-      try {
-        const quote = await getStockQuote(upperQuery);
-        setResults({ type: 'stock', data: quote });
-      } catch {
-        // Stock quote failed — fall back to company name search
-        const companies = await getCompanies({ limit: 100 });
-        const filtered = (companies?.companies || []).filter(
-          (c) =>
-            c.ticker?.toUpperCase().includes(upperQuery) ||
-            c.name?.toUpperCase().includes(upperQuery)
-        );
-        if (filtered.length > 0) {
-          setResults({ type: 'companies', data: filtered });
-        } else {
-          setError(`No company found for "${query}". Try a valid ticker symbol (e.g. AAPL, MSFT, NVDA).`);
-        }
-      }
-    } catch {
-      setError('Search unavailable — backend may be offline');
-    } finally {
-      setSearching(false);
-    }
+  const [attempt, setAttempt] = useState(0);
+
+  function handleSearch(e) {
+    e.preventDefault();
+    const term = query.trim();
+    if (!term) return;
+    setSearchParams({ q: term });
+    setAttempt((value) => value + 1);
   }
 
-  // Auto-run the search when arriving with ?q=... from the TopNav search bar,
-  // and re-run when the URL query changes (e.g. searching again from TopNav
-  // while already on the /search page).
   useEffect(() => {
-    if (initialQuery.trim()) {
-      setQuery(initialQuery);
-      handleSearch();
+    let active = true;
+    const term = initialQuery.trim();
+    setQuery(initialQuery);
+    setResults(null);
+    setError(null);
+    setSearching(Boolean(term));
+    if (!term) return;
+
+    async function search() {
+      try {
+        // Search the whole tracked universe on the server before trying an
+        // untracked ticker. Company names should never trigger ingestion.
+        const companies = await getCompanies({ q: term, limit: 100 });
+        if (!active) return;
+        if (companies?.companies?.length) {
+          setResults({ type: 'companies', data: companies.companies });
+        } else if (/^[A-Za-z0-9.^-]{1,12}$/.test(term)) {
+          const quote = await getStockQuote(term.toUpperCase());
+          if (active) setResults({ type: 'stock', data: quote });
+        } else {
+          setError(`No company found for "${term}".`);
+        }
+      } catch {
+        if (active) setError('Search could not be completed. Try again or check the ticker.');
+      } finally {
+        if (active) setSearching(false);
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery]);
+    search();
+    return () => { active = false; };
+  }, [initialQuery, attempt]);
 
   return (
     <div>
@@ -61,7 +60,7 @@ export default function Search() {
         <div>
           <h1 className="text-4xl font-bold text-on-surface">Search</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Search markets, tickers, companies, and analysis.
+            Search companies by name or ticker.
           </p>
         </div>
       </div>
@@ -75,6 +74,8 @@ export default function Search() {
           <input
             className="input-field pl-10 text-lg data-font"
             placeholder="Search by ticker (e.g. AAPL) or company name..."
+            aria-label="Company name or ticker"
+            maxLength={100}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -188,9 +189,8 @@ export default function Search() {
                           className={`${
                             i % 2 === 0 ? 'bg-surface' : 'bg-surface-dim'
                           } border-b border-outline-variant hover:bg-surface-variant transition-colors cursor-pointer`}
-                          onClick={() => navigate(`/companies/${c.ticker}`)}
                         >
-                          <td className="py-2 px-4 font-bold">{c.ticker}</td>
+                          <td className="py-2 px-4 font-bold"><Link className="underline" to={`/companies/${encodeURIComponent(c.ticker)}`}>{c.ticker}</Link></td>
                           <td className="py-2 px-4">{c.name}</td>
                           <td className="py-2 px-4 text-on-surface-variant">{c.exchange}</td>
                           <td className="py-2 px-4">{c.sector}</td>

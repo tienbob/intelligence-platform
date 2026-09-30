@@ -18,6 +18,7 @@ export default function CompanyDetail() {
   const [technicals, setTechnicals] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -31,11 +32,23 @@ export default function CompanyDetail() {
           getFinancialMetrics(ticker),
           getTechnicalIndicators(ticker),
         ]);
-        setQuote(q.status === 'fulfilled' ? q.value : null);
-        setPrices(p.status === 'fulfilled' ? p.value?.prices || [] : []);
-        setStatements(s.status === 'fulfilled' ? s.value || [] : []);
-        setMetrics(m.status === 'fulfilled' ? m.value : null);
-        setTechnicals(t.status === 'fulfilled' ? t.value : null);
+        // allSettled resolves even when every request failed, so each rejected
+        // result must be surfaced — previously five failures rendered as a
+        // page of empty sections with no message at all (audit U01).
+        const failed = [];
+        const resolve = (result, label, fallback, map = (value) => value) => {
+          if (result.status === 'fulfilled') return map(result.value);
+          failed.push(label);
+          return fallback;
+        };
+        setQuote(resolve(q, 'quote', null));
+        setPrices(resolve(p, 'price history', [], (value) => value?.prices || []));
+        setStatements(resolve(s, 'financial statements', [], (value) => value || []));
+        setMetrics(resolve(m, 'metrics', null));
+        setTechnicals(resolve(t, 'technical indicators', null));
+        if (failed.length > 0) {
+          setError(`Could not load: ${failed.join(', ')}.`);
+        }
       } catch {
         setError('Failed to load company data');
       } finally {
@@ -43,7 +56,7 @@ export default function CompanyDetail() {
       }
     }
     load();
-  }, [ticker]);
+  }, [ticker, reloadKey]);
 
   if (loading) {
     return (
@@ -63,6 +76,13 @@ export default function CompanyDetail() {
         <span className="material-symbols-outlined text-sm">arrow_back</span>
         Back to Companies
       </button>
+
+      {error && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>{error}</p>
+          <button className="btn-secondary btn-sm" onClick={() => setReloadKey((n) => n + 1)}>Retry</button>
+        </div>
+      )}
 
       {/* Stock Quote Header */}
       {quote && (

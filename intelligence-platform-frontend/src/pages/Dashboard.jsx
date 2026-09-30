@@ -1,3 +1,4 @@
+import { startPolling } from '../services/polling';
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getMarketOverview, getAlerts, getMarketIndices, getTopMovers } from '../services/api';
@@ -12,42 +13,41 @@ export default function Dashboard() {
   const [indices, setIndices] = useState([]);
   const [topMovers, setTopMovers] = useState([]);
 
-  const loadData = useCallback(async () => {
+  const [failedSections, setFailedSections] = useState([]);
+
+  const [retryVersion, setRetryVersion] = useState(0);
+  const loadData = useCallback(async (active) => {
+    const failures = [];
+
     // Fire each request independently so every section renders as soon as its
     // own response returns — a slow/failing one (e.g. rate-limited indices)
-    // never blocks the others.
-    getMarketOverview()
-      .then(setMarket)
-      .catch(() => setMarket(null));
+    // never blocks the others. Failures are collected so the page can surface
+    // one actionable banner: previously a dead backend rendered "—"
+    // placeholders indistinguishable from "no data" (audit U1).
+    const section = (name, request, apply, fallback) =>
+      request()
+        .then((data) => { if (active()) apply(data); })
+        .catch(() => {
+          failures.push(name);
+          if (active()) apply(fallback);
+        });
 
-    getAlerts({ limit: 5 })
-      .then((d) => setAlerts(d?.alerts || []))
-      .catch(() => setAlerts([]));
+    await Promise.allSettled([
+      section('market overview', getMarketOverview, setMarket, null),
+      section('alerts', () => getAlerts({ limit: 5 }), (d) => setAlerts(d?.alerts || []), []),
+      section('market indices', getMarketIndices, (d) => setIndices(d?.indices || []), []),
+      section('top movers', getTopMovers, (d) => setTopMovers(d?.top_movers || []), []),
+    ]);
 
-    getMarketIndices()
-      .then((d) => setIndices(d?.indices || []))
-      .catch(() => setIndices([]));
-
-    getTopMovers()
-      .then((d) => setTopMovers(d?.top_movers || []))
-      .catch(() => setTopMovers([]));
+    if (active()) setFailedSections(failures);
   }, []);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-    const interval = REFRESH_DASHBOARD_MS > 0 ? setInterval(loadData, REFRESH_DASHBOARD_MS) : null;
-    return () => {
-      clearTimeout(timer);
-      if (interval) clearInterval(interval);
-    };
-  }, [loadData]);
+  useEffect(() => startPolling(loadData, REFRESH_DASHBOARD_MS), [loadData, retryVersion]);
 
   const trend = market?.market?.trend || '—';
   const volatility = market?.market?.volatility || '—';
-  const vix = market?.macro_environment?.vix || '—';
-  const vixPct = market?.macro_environment?.vix ? Math.min(100, (market.macro_environment.vix / 40) * 100) : 45;
+  const vix = market?.macro_environment?.vix ?? '—';
+  const vixPct = market?.macro_environment?.vix != null ? Math.min(100, (market.macro_environment.vix / 40) * 100) : 0;
 
   return (
     <div>
@@ -65,6 +65,13 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {failedSections.length > 0 && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load: {failedSections.join(', ')}. The sections below may be incomplete.</p>
+          <button className="btn-secondary btn-sm" onClick={() => { setFailedSections([]); setRetryVersion(v => v + 1); }}>Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-gutter">
         {/* Macro Snapshot */}

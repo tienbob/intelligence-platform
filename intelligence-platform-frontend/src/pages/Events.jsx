@@ -10,6 +10,7 @@ export default function Events() {
   const [error, setError] = useState(null);
   const [tickerFilter, setTickerFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -28,11 +29,13 @@ export default function Events() {
       }
     }
     load();
-  }, [tickerFilter, typeFilter]);
+  }, [tickerFilter, typeFilter, reloadKey]);
 
   function retryLoad() {
-    setTickerFilter('');
-    setTypeFilter('');
+    // Re-run the current query, filters preserved. Previously this only
+    // cleared filters — a no-op on an initial unfiltered failure, so Retry
+    // issued no new request (audit F10).
+    setReloadKey((n) => n + 1);
   }
 
   const eventTypes = [...new Set(events.map((e) => e.event_type).filter(Boolean))];

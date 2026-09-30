@@ -105,6 +105,8 @@ export default function Backtest() {
 
   const result = selectedRun?.result;
   const benchmark = selectedRun?.benchmark;
+  // Snapshot pinning disclosure (audit F12) — see compute_snapshot_coverage.
+  const coverage = selectedRun?.run?.snapshot_coverage;
 
   return (
     <div>
@@ -205,14 +207,50 @@ export default function Backtest() {
             </div>
           )}
 
+          {/* Snapshot pinning disclosure (audit F12): never overstate
+              reproducibility — score-driven strategies read live score history
+              even on a pinned run, and the benchmark may fall back to live. */}
+          {coverage?.mode === 'pinned' && (
+            <div className="mb-6 p-3 rounded border border-tertiary/40 bg-tertiary/10 text-sm text-on-surface">
+              <span className="font-semibold">Fully pinned:</span> all decision inputs
+              (prices{coverage.pinned?.includes('benchmark') ? ' and benchmark' : ''})
+              served from snapshot #{coverage.snapshot_id}
+              {coverage.snapshot_as_of ? ` (as of ${new Date(coverage.snapshot_as_of).toLocaleDateString()})` : ''}.
+            </div>
+          )}
+          {coverage?.mode === 'partially_pinned' && (
+            <div className="mb-6 p-3 rounded border border-secondary-container/50 bg-secondary-container/10 text-sm text-on-surface">
+              <span className="font-semibold">Partially pinned:</span> prices
+              {coverage.pinned?.includes('benchmark') ? ' and benchmark' : ''} served from
+              snapshot #{coverage.snapshot_id}
+              {coverage.snapshot_as_of ? ` (as of ${new Date(coverage.snapshot_as_of).toLocaleDateString()})` : ''};
+              {' '}{(coverage.live || []).join(', ').replace(/_/g, ' ')} read from live tables —
+              re-runs can differ if that live data changes.
+            </div>
+          )}
+          {coverage?.mode === 'unpinned' && (
+            <p className="mb-6 text-xs text-on-surface-variant">
+              Data pinning: none — inputs read from live tables ({(coverage.live || []).join(', ').replace(/_/g, ' ')}).
+            </p>
+          )}
+
           {/* Performance Metrics */}
           {result && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-6">
-              <MetricTile label="Total Return" value={result.total_return != null ? `${(result.total_return * 100).toFixed(2)}%` : '—'} icon="trending_up" color={result.total_return >= 0 ? 'tertiary' : 'error'} />
-              <MetricTile label="Sharpe Ratio" value={result.sharpe_ratio?.toFixed(2) || '—'} icon="query_stats" color="secondary" />
-              <MetricTile label="Max Drawdown" value={result.max_drawdown != null ? `${(result.max_drawdown * 100).toFixed(1)}%` : '—'} icon="trending_down" color="error" />
-              <MetricTile label="Win Rate" value={result.win_rate != null ? `${(result.win_rate * 100).toFixed(1)}%` : '—'} icon="military_tech" color="tertiary" />
-            </div>
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-2">
+                <MetricTile label="Total Return" value={result.total_return != null ? `${(result.total_return * 100).toFixed(2)}%` : '—'} icon="trending_up" color={result.total_return >= 0 ? 'tertiary' : 'error'} />
+                <MetricTile label="Sharpe Ratio" value={result.sharpe_ratio?.toFixed(2) || '—'} icon="query_stats" color="secondary" />
+                <MetricTile label="Max Drawdown" value={result.max_drawdown != null ? `${(result.max_drawdown * 100).toFixed(1)}%` : '—'} icon="trending_down" color="error" />
+                <MetricTile label="Win Rate*" value={result.win_rate != null ? `${(result.win_rate * 100).toFixed(1)}%` : '—'} icon="military_tech" color="tertiary" />
+              </div>
+              {/* Audit F13: this is a sell-execution proxy (share of sells priced
+                  above average cost), not closed-trade realized P&L — a single
+                  sell can read 100% wins next to a negative total return.
+                  Assumes 0% risk-free, no fees/slippage unless documented. */}
+              <p className="text-[11px] text-on-surface-variant mb-6">
+                *Win rate = share of SELL executions priced above that position's average cost, weighted by outcome count (not by shares or profit). Breakeven is not counted as a win. Always read it alongside total return.
+              </p>
+            </>
           )}
 
           {/* Equity Curve Chart */}

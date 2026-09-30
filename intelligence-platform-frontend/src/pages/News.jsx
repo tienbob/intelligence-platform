@@ -48,18 +48,22 @@ export default function News() {
         getEvents({ limit: 20 }),
       ]);
       setNews(newsData?.news || []);
-      // Client-side filter by event type (map selected labels → API codes) + min impact
+      // Client-side filter by event type (map selected labels → API codes) + min impact.
       const allEvents = eventsData?.events || [];
       const selectedCodes = Object.entries(eventTypes)
         .filter(([, v]) => v)
         .flatMap(([label]) => EVENT_TYPE_OPTIONS[label] || []);
+      // Zero selected categories means "no categories selected" — not "all"
+      // (audit F10). The header states the reason when nothing is selected.
       const filtered = allEvents
-        .filter((e) => (selectedCodes.length === 0 ? true : selectedCodes.includes(e.event_type)))
+        .filter((e) => selectedCodes.includes(e.event_type))
         .filter((e) => e.impact_score == null || e.impact_score >= minImpact);
       setEvents(filtered);
       const v = mktData?.macro_environment?.vix;
       setVix(v != null ? v.toFixed(2) : null);
-      setVixChange(v != null && v < 20 ? 'low' : v < 30 ? 'moderate' : 'high');
+      // Missing VIX is "unknown" — never coerced into a band (null < 30 is
+      // true in JS, which silently produced "moderate", audit U01).
+      setVixChange(v == null ? 'unknown' : v < 20 ? 'low' : v < 30 ? 'moderate' : 'high');
       setError(null);
     } catch (e) {
       setError(e.message || 'Failed to load market intelligence');
@@ -158,9 +162,9 @@ export default function News() {
           <div className="card flex flex-col items-center justify-center py-8">
             <div className="text-sm text-on-surface-variant mb-1 data-font">VIX INDEX</div>
             <div className="text-4xl font-bold text-on-surface data-font">{vix || '—'}</div>
-            <div className={`text-sm flex items-center gap-1 mt-1 data-font ${vixChange === 'low' ? 'text-tertiary' : vixChange === 'high' ? 'text-error' : 'text-secondary'}`}>
+            <div className={`text-sm flex items-center gap-1 mt-1 data-font ${vixChange === 'low' ? 'text-tertiary' : vixChange === 'high' ? 'text-error' : vixChange === 'unknown' ? 'text-on-surface-variant' : 'text-secondary'}`}>
               <span className="material-symbols-outlined text-base">
-                {vixChange === 'low' ? 'arrow_downward' : vixChange === 'high' ? 'arrow_upward' : 'trending_flat'}
+                {vixChange === 'low' ? 'arrow_downward' : vixChange === 'high' ? 'arrow_upward' : vixChange === 'unknown' ? 'help' : 'trending_flat'}
               </span>
               {vixChange || '—'}
             </div>
@@ -175,7 +179,11 @@ export default function News() {
                 <span className="material-symbols-outlined text-secondary">timeline</span>
                 Event Timeline
               </h2>
-              <span className="text-xs text-on-surface-variant data-font">{events.length} {events.length === 1 ? 'event' : 'events'}</span>
+              <span className="text-xs text-on-surface-variant data-font">
+                {Object.values(eventTypes).some(Boolean)
+                  ? `${events.length} ${events.length === 1 ? 'event' : 'events'}`
+                  : 'No categories selected'}
+              </span>
             </div>
             {/* Same height cap as Correlated News — applied unconditionally
                 so the columns are always equal regardless of item counts. */}
