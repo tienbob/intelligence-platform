@@ -31,8 +31,15 @@ router = APIRouter(prefix="/market", tags=["market"])
 # in Redis (24h TTL), but this cache short-circuits the entire endpoint
 # so we don't even create a provider instance on repeated polls.
 _indices_cache: dict[str, Any] = {}
-_indices_cache_ttl: float = 43200.0  # 5 minutes
+_indices_cache_ttl: float = 300.0  # 5 minutes (was 43200.0 = 12h — audit F08)
 _indices_cache_at: float = 0.0
+# Last successful payload: served through provider outages so the dashboard
+# degrades instead of blanking. A failed fetch is retried after
+# ``_indices_failure_retry_ttl`` (short negative cache) instead of pinning an
+# empty result for the full TTL (audit F08).
+_indices_last_good: dict[str, Any] | None = None
+_indices_failure_retry_ttl: float = 30.0
+_indices_retry_after: float = 0.0
 
 _INDEX_SYMBOLS = ["^GSPC", "^IXIC", "^DJI", "^RUT"]
 _INDEX_NAMES = {
@@ -44,12 +51,22 @@ _INDEX_NAMES = {
 
 
 async def get_market_indices_data() -> dict[str, Any]:
-    """Fetch market indices with module-level caching (shared by endpoints)."""
-    global _indices_cache, _indices_cache_at
+    """Fetch market indices with module-level caching (shared by endpoints).
+
+    Successful payloads are cached for ``_indices_cache_ttl``; a failed fetch
+    is retried after ``_indices_failure_retry_ttl`` and the last known good
+    payload is served meanwhile. The cache is only ever populated with real
+    data — an all-provider failure no longer pins an empty dashboard (F08).
+    """
+    global _indices_cache, _indices_cache_at, _indices_last_good, _indices_retry_after
 
     now = time.monotonic()
     if _indices_cache and (now - _indices_cache_at) < _indices_cache_ttl:
         return _indices_cache
+    if now < _indices_retry_after:
+        # A fetch failed very recently — throttle upstream retries and serve
+        # the last known good payload without new provider calls.
+        return _indices_last_good or {"indices": []}
 
     try:
         provider = FMPProvider()
@@ -78,19 +95,28 @@ async def get_market_indices_data() -> dict[str, Any]:
             except Exception as exc:
                 logger.warning("Failed to fetch index %s: %s", symbol, exc)
         await provider.close()
-        result = {"indices": list(indices.values())}
-        _indices_cache = result
-        _indices_cache_at = now
-        return result
+        if indices:
+            result = {"indices": list(indices.values())}
+            _indices_cache = result
+            _indices_cache_at = now
+            _indices_last_good = result
+            _indices_retry_after = 0.0
+            return result
+        # Every provider call failed → short negative cache, serve last known
+        # good data if we have it (never cache an empty result for the TTL).
+        logger.warning("All index providers failed; serving last known good data if available")
+        _indices_retry_after = now + _indices_failure_retry_ttl
+        return _indices_last_good or {"indices": []}
     except Exception as exc:
         logger.error("Failed to fetch indices: %s", exc)
-        return {"indices": []}
+        _indices_retry_after = now + _indices_failure_retry_ttl
+        return _indices_last_good or {"indices": []}
 
 
 @router.get("/overview", response_model=MarketOverview)
 async def get_market_overview(
     db: AsyncSession = Depends(get_db),
-    limit: int = Query(default=10, le=50),
+    limit: int = Query(default=10, ge=1, le=50),
 ):
     """Get market overview (lean: only fields the FE renders)."""
     macro_engine = MacroAnalysisEngine(db)

@@ -19,8 +19,8 @@ router = APIRouter(prefix="/news", tags=["news"])
 @router.get("/", response_model=NewsListResponse)
 async def list_news(
     ticker: str | None = Query(default=None),
-    limit: int = Query(default=50, le=200),
-    offset: int = Query(default=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """List news (lean rows: what the FE feed renders)."""

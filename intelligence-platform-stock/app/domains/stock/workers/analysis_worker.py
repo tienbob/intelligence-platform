@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 async def recalculate_scores() -> None:
     """Recalculate investment scores for all tracked companies."""
     async with async_session_factory() as session:
-        result = await session.execute(select(Company).limit(100))
+        result = await session.execute(select(Company).order_by(Company.id))
         companies = result.scalars().all()
 
         scoring = InvestmentScoringEngine(session)
@@ -46,7 +46,7 @@ async def recalculate_scores() -> None:
 async def update_derived_metrics() -> None:
     """Update technical indicators and risk metrics for all companies."""
     async with async_session_factory() as session:
-        result = await session.execute(select(Company).limit(100))
+        result = await session.execute(select(Company).order_by(Company.id))
         companies = result.scalars().all()
 
         technical = TechnicalAnalysisEngine(session)

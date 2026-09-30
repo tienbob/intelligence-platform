@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.core.database import get_db
 from app.core.security import (
@@ -60,9 +61,14 @@ async def list_analysis_jobs(
     actor = get_actor(request)
     result = await db.execute(
         select(Analysis, Company.ticker)
+        .options(load_only(
+            Analysis.id, Analysis.analysis_id, Analysis.user_id, Analysis.status,
+            Analysis.investment_score, Analysis.risk_score, Analysis.created_at,
+            raiseload=True,
+        ))
         .join(Company, Company.id == Analysis.company_id)
         .where(visible_to_actor(Analysis.user_id, actor))
-        .order_by(Analysis.created_at.desc())
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc())
         .offset(offset)
         .limit(limit)
     )
@@ -195,8 +201,11 @@ async def run_company_analysis(
                     current.status = "failed"
                     current.llm_analysis = {**(current.llm_analysis or {}), "_failure_reason": _failure_reason(exc)}
                     await session.commit()
+                except AnalysisCancelled:
+                    await session.rollback()
                 except Exception:
-                    pass
+                    logger.exception("Could not persist analysis failure: %s", analysis_id)
+                    raise
 
 
 
@@ -214,8 +223,6 @@ async def create_company_analysis(
         request.include_news, request.include_fundamentals, request.include_technical, request.include_macro
     )):
         raise HTTPException(status_code=422, detail="This analysis engine requires all data sources")
-    # Idempotency check (Architecture §101)
-    idempotency_key = await check_idempotency(fastapi_request)
 
     # Verify company exists — auto-ingest if not tracked yet
     result = await db.execute(
@@ -228,6 +235,8 @@ async def create_company_analysis(
         if not company:
             raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
 
+    from app.core.jobs import reserve_job
+    job = await reserve_job(db, fastapi_request, "analysis", request.model_dump(mode="json"))
     analysis_id = str(uuid.uuid4())
     analysis = Analysis(
         analysis_id=analysis_id,
@@ -239,24 +248,9 @@ async def create_company_analysis(
         llm_analysis={"_request": request.model_dump()},
     )
     db.add(analysis)
-    await db.commit()
-
-    # Schedule background task
-    background_tasks.add_task(
-        run_company_analysis,
-        analysis_id,
-        request.ticker.upper(),
-        request.include_news,
-        request.include_fundamentals,
-        request.include_technical,
-        request.include_macro,
-    )
-
     response = AnalysisCreateResponse(analysis_id=analysis_id, status="queued")
-
-    # Store idempotency result
-    if idempotency_key:
-        store_idempotency_result(idempotency_key, 202, response.model_dump())
+    job.response = response.model_dump(mode="json")
+    await db.commit()
 
     return response
 

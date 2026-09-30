@@ -163,9 +163,7 @@ class StockDomain:
             # previously this job only lived in a hardcoded scheduler that
             # was never started, so the snapshots table stayed empty.
             _Task("Create daily backtest snapshot", 1440, create_daily_snapshot),
-            # Drain any 'queued' backtest runs left behind by an API restart
-            # mid-execution (POST /runs normally executes synchronously).
-            _Task("Run scheduled backtests", 60, run_scheduled_backtests),
+
         ]
 
     # ── API Router ──────────────────────────────────────────────

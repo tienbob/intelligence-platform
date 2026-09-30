@@ -61,6 +61,10 @@ class BacktestRun(Base, TimestampMixin):
     snapshot_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("backtest_snapshots.id"), nullable=True
     )
+    # Which decision inputs were pinned to the snapshot vs read live
+    # (audit F12): {mode, snapshot_id, snapshot_as_of, pinned, live}.
+    # Null for runs executed before this disclosure existed.
+    snapshot_coverage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # Versioning (Section 162: reproducibility)
     scoring_model: Mapped[str | None] = mapped_column(String(50))

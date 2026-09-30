@@ -141,16 +141,25 @@ class ScoreComponent(BaseModel):
     """One weighted component of the screening score."""
 
     label: str
-    value: float
+    # None = the component was absent on this score row. Callers must render a
+    # missing marker, never substitute 0 (audit F07).
+    value: Optional[float] = None
     weight: float
 
 
 class InvestmentOpportunity(BaseModel):
-    """Opportunity row with score breakdown + deep-analysis linkage."""
+    """Opportunity row with score breakdown + deep-analysis linkage.
+
+    ``score``/``recommendation``/``components``/``scoring_*`` all describe the
+    SAME screening row (that is also what filtering/ordering use). The linked
+    deep analysis is reported through the ``analysis_*`` fields, including its
+    own ``analysis_score`` (audit F07).
+    """
 
     ticker: str
     score: float
-    risk_score: float
+    # None = no risk metric recorded; render "—" rather than inventing a value.
+    risk_score: Optional[float] = None
     volatility: Optional[float] = None
     sector: Optional[str] = None
     recommendation: str = "NEUTRAL"
@@ -159,6 +168,7 @@ class InvestmentOpportunity(BaseModel):
     analysis_id: Optional[str] = None
     analysis_status: Optional[str] = None
     analysis_timestamp: Optional[datetime] = None
+    analysis_score: Optional[float] = None
 
     # Screening-model breakdown (always present — the "actual calculation")
     components: list[ScoreComponent] = Field(default_factory=list)

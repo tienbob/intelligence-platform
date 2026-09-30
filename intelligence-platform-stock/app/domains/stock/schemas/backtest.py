@@ -5,9 +5,9 @@ Pydantic schemas for backtesting API (Section 162, Phase 9).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 # ── Request schemas ──────────────────────────────────────────────
@@ -21,21 +21,60 @@ BacktestStrategy = Literal[
 ]
 
 
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+Ticker = Annotated[str, StringConstraints(strip_whitespace=True, to_upper=True, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.^-]+$")]
+PositiveInteger = Annotated[int, Field(strict=True, gt=0)]
+
+
+class StrategyParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ScoreParameters(StrategyParameters):
+    threshold: float = Field(default=70, ge=0, le=100, allow_inf_nan=False)
+    rebalance_days: PositiveInteger = 21
+
+
+class MomentumParameters(StrategyParameters):
+    top_n: PositiveInteger = 5
+    lookback_trading_days: PositiveInteger = 60
+    rebalance_days: PositiveInteger = 21
+
+
+class OptimizerParameters(StrategyParameters):
+    rebalance_days: PositiveInteger = 21
+    risk_profile: Literal["conservative", "moderate", "aggressive"] = "moderate"
+    max_position_weight: float = Field(default=0.15, gt=0, le=1, allow_inf_nan=False)
+    max_sector_weight: float = Field(default=0.30, gt=0, le=1, allow_inf_nan=False)
+    volatility_lookback: PositiveInteger = 60
+
+
+_PARAMETER_MODELS = {
+    "score_threshold": ScoreParameters,
+    "momentum": MomentumParameters,
+    "equal_weight": StrategyParameters,
+    "portfolio_optimizer": OptimizerParameters,
+}
+
+
 class BacktestRunRequest(BaseModel):
     """POST /api/v1/backtest/runs request (Section 162)."""
 
-    name: str
+    name: Name
     strategy: BacktestStrategy = "score_threshold"
     start_date: datetime
     end_date: datetime
-    initial_capital: float = Field(default=100000.0, gt=0)
-    benchmark_ticker: str = "SPY"
+    initial_capital: float = Field(default=100000.0, gt=0, allow_inf_nan=False)
+    benchmark_ticker: Ticker = "SPY"
     parameters: dict[str, Any] = Field(default_factory=dict)
-    tickers: Optional[list[str]] = None  # if None, use all tracked companies
-    snapshot_id: Optional[int] = None  # if set, run against a point-in-time snapshot
+    tickers: Optional[list[Ticker]] = Field(default=None, min_length=1)  # if None, use all tracked companies
+    snapshot_id: Optional[int] = Field(default=None, gt=0)  # if set, run against a point-in-time snapshot
 
     @model_validator(mode="after")
     def _validate_period(self) -> "BacktestRunRequest":
+        if (self.start_date.tzinfo is None) != (self.end_date.tzinfo is None):
+            raise ValueError("start_date and end_date must use consistent time zones")
+        self.parameters = _PARAMETER_MODELS[self.strategy].model_validate(self.parameters).model_dump(exclude_unset=True)
         if self.end_date <= self.start_date:
             raise ValueError("end_date must be after start_date")
         return self
@@ -44,10 +83,10 @@ class BacktestRunRequest(BaseModel):
 class BacktestSnapshotRequest(BaseModel):
     """POST /api/v1/backtest/snapshots request (Section 162)."""
 
-    name: str
+    name: Name
     as_of: datetime
     description: Optional[str] = None
-    tickers: Optional[list[str]] = None  # if None, use all tracked companies
+    tickers: Optional[list[Ticker]] = Field(default=None, min_length=1)  # if None, use all tracked companies
 
 
 # ── Response schemas ─────────────────────────────────────────────
@@ -64,6 +103,9 @@ class BacktestRunResponse(BaseModel):
     end_date: datetime
     initial_capital: float
     error_message: Optional[str] = None
+    # Snapshot pinning disclosure (audit F12): which decision inputs were
+    # pinned vs read live. Null for runs from before this field existed.
+    snapshot_coverage: Optional[dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 

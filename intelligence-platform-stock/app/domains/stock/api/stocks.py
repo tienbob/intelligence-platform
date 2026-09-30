@@ -163,7 +163,7 @@ async def get_stock_prices(
     start_date: datetime = Query(default=None),
     end_date: datetime = Query(default=None),
     interval: str = Query(default="1d"),
-    limit: int = Query(default=365, le=2000),
+    limit: int = Query(default=365, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
     """Get historical stock prices (lean points: what the FE table renders)."""

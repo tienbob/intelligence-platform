@@ -145,7 +145,7 @@ async def detect_anomalies() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Company).limit(100)
+            select(Company).order_by(Company.id)
         )
         companies = result.scalars().all()
 
@@ -190,7 +190,7 @@ async def analyze_events() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Company).limit(50)
+            select(Company).order_by(Company.id)
         )
         companies = result.scalars().all()
 

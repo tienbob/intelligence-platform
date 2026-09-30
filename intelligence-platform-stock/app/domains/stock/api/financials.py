@@ -25,8 +25,11 @@ async def _get_company(db: AsyncSession, ticker: str) -> Company:
     result = await db.execute(select(Company).where(Company.ticker == ticker.upper()))
     company = result.scalar_one_or_none()
     if not company:
-        # Auto-ingest the ticker so direct navigation self-populates
-        from app.domains.stock.api.v1.stocks import _auto_ingest_ticker
+        # Auto-ingest the ticker so direct navigation self-populates.
+        # NOTE: the module is app.domains.stock.api.stocks — the earlier
+        # `api.v1.stocks` path never existed and raised ModuleNotFoundError on
+        # every unknown ticker (audit F01).
+        from app.domains.stock.api.stocks import _auto_ingest_ticker
         company = await _auto_ingest_ticker(ticker, db)
         if not company:
             raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
@@ -36,7 +39,7 @@ async def _get_company(db: AsyncSession, ticker: str) -> Company:
 @router.get("/{ticker}/statements", response_model=list[FinancialStatementResponse])
 async def get_financial_statements(
     ticker: str,
-    limit: int = Query(default=8, le=40),
+    limit: int = Query(default=8, ge=1, le=40),
     db: AsyncSession = Depends(get_db),
 ):
     """Get financial statements for a company."""
