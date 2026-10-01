@@ -15,105 +15,25 @@ from app.domains.stock.models.company import Company
 from app.domains.stock.models.stock_price import StockPrice
 from app.domains.stock.providers import MassiveProvider, ProviderError
 from app.domains.stock.schemas.stock import StockPriceHistory, StockPricePoint, StockQuote
+from app.domains.stock.services.company_resolution import (
+    get_or_schedule_missing,
+    ingestion_pending,
+)
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
-
-
-async def _auto_ingest_ticker(ticker: str, db: AsyncSession) -> Company | None:
-    """
-    Automatically pull data for a ticker that isn't tracked yet.
-
-    When a user searches for a ticker that doesn't exist in the DB, this
-    ingests historical prices, news, and fundamentals so the platform
-    self-populates on demand instead of requiring manual ingestion.
-    """
-    from datetime import datetime, timedelta, timezone
-
-    from app.domains.stock.ingestion.fundamentals import FundamentalsIngestion
-    from app.domains.stock.ingestion.market import MarketDataIngestion
-    from app.domains.stock.ingestion.news import NewsIngestion
-
-    try:
-        # 1. Ingest historical prices (creates the company record)
-        market = MarketDataIngestion(db)
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=365)
-        await market.ingest_historical_prices(ticker, start, end, "1d")
-
-        # 2. Ingest company profile + financial statements
-        try:
-            fundamentals = FundamentalsIngestion(db)
-            await fundamentals.ingest_company_profile(ticker)
-            await fundamentals.ingest_fmp_statements(ticker)
-        except Exception:
-            pass  # fundamentals are best-effort
-
-        # 3. Ingest recent news
-        try:
-            news = NewsIngestion(db)
-            await news.ingest_company_news(ticker, limit=50)
-        except Exception:
-            pass  # news is best-effort
-
-        # 3b. Detect market events from the ingested news immediately,
-        # so the Market Overview "Major Events" panel has data right away
-        # instead of waiting for the hourly scheduler. Use a 7-day window
-        # because auto-ingested news can span several days.
-        try:
-            from app.domains.stock.scoring.event_detection import EventIntelligenceEngine
-
-            company = (await db.execute(
-                select(Company).where(Company.ticker == ticker.upper())
-            )).scalar_one_or_none()
-            if company:
-                event_engine = EventIntelligenceEngine(db)
-                await event_engine.detect_events_from_news(company.id, hours=168)
-        except Exception:
-            pass  # event detection is best-effort
-
-        # 4. Compute derived data (technical indicators + financial metrics)
-        try:
-            from app.domains.stock.scoring.fundamental_analysis import FundamentalAnalysisEngine
-            from app.domains.stock.scoring.technical_analysis import TechnicalAnalysisEngine
-
-            company = (await db.execute(
-                select(Company).where(Company.ticker == ticker.upper())
-            )).scalar_one_or_none()
-            if company:
-                await TechnicalAnalysisEngine(db).calculate_indicators(company.id)
-                await FundamentalAnalysisEngine(db).calculate_and_store(company.id)
-        except Exception:
-            pass  # derived data is best-effort
-
-        # Re-fetch the company
-        result = await db.execute(
-            select(Company).where(Company.ticker == ticker.upper())
-        )
-        return result.scalar_one_or_none()
-    except Exception:
-        return None
 
 
 @router.get("/{ticker}", response_model=StockQuote)
 async def get_stock_quote(ticker: str, db: AsyncSession = Depends(get_db)):
     """Get the latest stock quote (Section 44)."""
-    # Try DB first for latest price
-    result = await db.execute(
-        select(Company).where(Company.ticker == ticker.upper())
-    )
-    company = result.scalar_one_or_none()
-    if not company:
-        # Auto-ingest the ticker so search self-populates the platform
-        company = await _auto_ingest_ticker(ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
-        # Re-query prices after ingestion
-        result = await db.execute(
-            select(Company).where(Company.ticker == ticker.upper())
-        )
-        company = result.scalar_one_or_none()
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+    company = await get_or_schedule_missing(ticker, db)
+    if company is None:
+        # First sighting of this ticker: ingestion was scheduled durably and
+        # runs in the worker. Answer promptly instead of running a 365-day
+        # provider + scoring pipeline inside the request (audit O02), which
+        # used to outlast the gateway's 30s upstream timeout and turn a
+        # working ingest into a browser 502.
+        raise ingestion_pending(ticker)
 
     # Get latest price from DB
     price_result = await db.execute(
@@ -163,19 +83,15 @@ async def get_stock_prices(
     start_date: datetime = Query(default=None),
     end_date: datetime = Query(default=None),
     interval: str = Query(default="1d"),
-    limit: int = Query(default=365, le=2000),
+    limit: int = Query(default=365, ge=1, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
     """Get historical stock prices (lean points: what the FE table renders)."""
-    result = await db.execute(
-        select(Company).where(Company.ticker == ticker.upper())
-    )
-    company = result.scalar_one_or_none()
-    if not company:
-        # Auto-ingest the ticker so direct navigation self-populates
-        company = await _auto_ingest_ticker(ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+    company = await get_or_schedule_missing(ticker, db)
+    if company is None:
+        # Scheduled for durable ingestion; do not run the provider pipeline
+        # in the request (audit O02).
+        raise ingestion_pending(ticker)
 
     if not end_date:
         end_date = datetime.now(timezone.utc)

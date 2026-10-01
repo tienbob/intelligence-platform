@@ -145,7 +145,7 @@ async def detect_anomalies() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Company).limit(100)
+            select(Company).order_by(Company.id)
         )
         companies = result.scalars().all()
 
@@ -190,7 +190,7 @@ async def analyze_events() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Company).limit(50)
+            select(Company).order_by(Company.id)
         )
         companies = result.scalars().all()
 
@@ -201,7 +201,7 @@ async def analyze_events() -> None:
 
             try:
                 # Seven-day window ensures news ingested by
-                # _auto_ingest_ticker, which can span several days,
+                # the first-time ingestion pipeline, which can span days,
                 # remains eligible for event detection.
                 await engine.detect_events_from_news(
                     company.id,

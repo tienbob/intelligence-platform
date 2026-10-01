@@ -7,7 +7,7 @@ service key instead of user JWTs. Mounted at /internal in main.py.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from app.core.security import verify_internal_service_key
 from app.domains.stock.api import (
@@ -49,7 +49,7 @@ async def internal_health_live():
 
 
 @internal_router.get("/health/ready")
-async def internal_health_ready():
+async def internal_health_ready(response: Response):
     from app.core.database import engine
     try:
         async with engine.connect() as conn:
@@ -57,6 +57,7 @@ async def internal_health_ready():
         db_status = "ok"
     except Exception:
         db_status = "degraded"
+        response.status_code = 503
     return {"status": "ok" if db_status == "ok" else "degraded", "database": db_status}
 
 

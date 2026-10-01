@@ -6,10 +6,12 @@ FROM ruby:3.3-slim AS base
 LABEL org.opencontainers.image.title="Market Intelligence Rails API"
 LABEL org.opencontainers.image.description="Rails API gateway for the Market Intelligence platform"
 
+ARG BUNDLE_WITHOUT=development:test
+
 ENV RAILS_ENV=production \
     BUNDLE_DEPLOYMENT=1 \
     BUNDLE_PATH=/usr/local/bundle \
-    BUNDLE_WITHOUT=development:test
+    BUNDLE_WITHOUT=${BUNDLE_WITHOUT}
 
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \

@@ -28,7 +28,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={addToast}>
       {children}
-      <div role="status" aria-live="polite" aria-atomic="true" className="fixed bottom-20 md:bottom-4 right-4 z-50 flex flex-col gap-2">
+      <div role="status" aria-live="polite" aria-atomic="true" className="fixed bottom-20 md:bottom-4 right-4 max-w-[calc(100vw-2rem)] w-96 z-50 flex flex-col gap-2">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -40,7 +40,7 @@ export function ToastProvider({ children }) {
                 : 'bg-secondary-container text-on-secondary-container border border-secondary'
             }`}
           >
-            <span className="flex-1">{t.message}</span>
+            <span className="flex-1 min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{t.message}</span>
             <button
               aria-label="Dismiss notification"
               className="opacity-70 hover:opacity-100 transition-opacity"

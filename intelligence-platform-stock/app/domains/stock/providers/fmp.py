@@ -115,11 +115,12 @@ class FMPProvider(FundamentalDataProvider, MarketDataProvider):
 
     # ── MarketDataProvider ───────────────────────────────────────
 
-    async def get_quote(self, ticker: str) -> dict[str, Any]:
+    async def get_quote(self, ticker: str, *, use_cache: bool = True) -> dict[str, Any]:
         data = await self._request(
             "GET",
             "/quote",
             params=self._build_params(symbol=ticker),
+            use_cache=use_cache,
         )
         quotes = data if isinstance(data, list) else data.get("quotes", data.get("results", []))
         if not quotes:

@@ -56,8 +56,8 @@ async def create_snapshot(
 
 @router.get("/snapshots", response_model=BacktestSnapshotListResponse)
 async def list_snapshots(
-    limit: int = Query(default=20, le=100),
-    offset: int = Query(default=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """List backtest snapshots (GLOBAL market data — shared by all users)."""
@@ -81,7 +81,7 @@ async def get_snapshot(snapshot_id: int, db: AsyncSession = Depends(get_db)):
 # ── Runs ─────────────────────────────────────────────────────────
 
 
-@router.post("/runs", response_model=BacktestRunResponse, status_code=201)
+@router.post("/runs", response_model=BacktestRunResponse, status_code=202)
 async def create_backtest_run(
     request: BacktestRunRequest,
     fastapi_request: Request,
@@ -89,37 +89,23 @@ async def create_backtest_run(
 ):
     """Create and execute a backtest run (Section 162). User-bound to caller."""
     actor = get_actor(fastapi_request)
-    engine = BacktestEngine(db)
-    try:
-        run = await engine.run_backtest(
-            name=request.name,
-            strategy=request.strategy,
-            start_date=request.start_date,
-            end_date=request.end_date,
-            initial_capital=request.initial_capital,
-            benchmark_ticker=request.benchmark_ticker,
-            parameters=request.parameters,
-            tickers=request.tickers,
-            snapshot_id=request.snapshot_id,
-            user_id=actor.get("user_id"),
-        )
-    except ValueError as exc:
-        # Bad strategy/parameters — client error, not a server fault.
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        # Execution failures are persisted on the run row (status=failed +
-        # error_message); surface the reason instead of a bare 500.
-        raise HTTPException(
-            status_code=500, detail=f"Backtest execution failed: {exc}"
-        ) from exc
-    return BacktestRunResponse.model_validate(run)
+    from app.core.jobs import reserve_job
+    from app.domains.stock.models.backtest import BacktestRun
+    job = await reserve_job(db, fastapi_request, "backtest", request.model_dump(mode="json"))
+    run = BacktestRun(**request.model_dump(exclude={"tickers"}), user_id=actor.get("user_id"), status="queued")
+    db.add(run)
+    await db.flush()
+    response = BacktestRunResponse.model_validate(run)
+    job.response = response.model_dump(mode="json")
+    await db.commit()
+    return response
 
 
 @router.get("/runs", response_model=BacktestRunListResponse)
 async def list_backtest_runs(
     request: Request,
-    limit: int = Query(default=20, le=100),
-    offset: int = Query(default=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """List backtest runs (lean rows: what the FE table renders).
@@ -152,13 +138,14 @@ async def get_backtest_run(
 
     result = await engine.get_result(run_id)
     benchmark = await engine.get_benchmark(run_id)
-    trades = await engine.get_trades(run_id)
+    trades = await engine.get_trades(run_id, limit=101)
 
     return BacktestRunDetailResponse(
         run=BacktestRunResponse.model_validate(run),
         result=BacktestResultResponse.model_validate(result) if result else None,
         benchmark=BacktestBenchmarkResponse.model_validate(benchmark) if benchmark else None,
-        trades=[BacktestTradeResponse.model_validate(t) for t in trades],
+        has_more=len(trades) > 100,
+        trades=[BacktestTradeResponse.model_validate(t) for t in trades[:100]],
     )
 
 
@@ -166,7 +153,8 @@ async def get_backtest_run(
 async def get_backtest_trades(
     run_id: int,
     request: Request,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """Get trades for a backtest run (ownership via parent run row)."""
@@ -177,7 +165,8 @@ async def get_backtest_trades(
     if not owns_row(run.user_id, get_actor(request)):
         raise HTTPException(status_code=404, detail="Backtest run not found")
 
-    trades = await engine.get_trades(run_id, limit=limit)
+    trades = await engine.get_trades(run_id, limit=limit + 1, offset=offset)
     return BacktestTradeListResponse(
-        trades=[BacktestTradeResponse.model_validate(t) for t in trades],
+        has_more=len(trades) > limit,
+        trades=[BacktestTradeResponse.model_validate(t) for t in trades[:limit]],
     )

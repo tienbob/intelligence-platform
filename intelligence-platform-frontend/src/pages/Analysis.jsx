@@ -1,3 +1,4 @@
+import { startPolling } from '../services/polling';
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { createCompanyAnalysis, getAnalysisJobs, deleteAnalysis, cancelAnalysis } from '../services/api';
@@ -33,19 +34,15 @@ export default function Analysis() {
   const supportsInclusions = data?.supports_inclusions !== false;
 
   useEffect(() => {
-    let stopped = false;
-    let timer;
-    async function load() {
+    async function load(active) {
       try {
         const data = await getAnalysisJobs({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
-        if (!stopped) setState({ page, data, error: null });
+        if (active()) setState({ page, data, error: null });
       } catch (error) {
-        if (!stopped) setState(previous => ({ page, data: previous?.page === page ? previous.data : null, error: error.message }));
+        if (active()) setState(previous => ({ page, data: previous?.page === page ? previous.data : null, error: error.message }));
       }
-      if (!stopped && REFRESH_ANALYSIS_JOBS_MS > 0) timer = setTimeout(load, REFRESH_ANALYSIS_JOBS_MS);
     }
-    load();
-    return () => { stopped = true; clearTimeout(timer); };
+    return startPolling(load, REFRESH_ANALYSIS_JOBS_MS);
   }, [page, version]);
 
   async function act(job, action) {

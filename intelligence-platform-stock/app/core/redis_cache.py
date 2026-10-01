@@ -28,7 +28,7 @@ def _json_default(obj: Any) -> Any:
 
 
 class RedisCache:
-    """Async-friendly Redis cache wrapper using redis-py (sync client in thread)."""
+    """Nonblocking Redis cache; connection failures are retried on later calls."""
 
     def __init__(
         self,
@@ -50,31 +50,17 @@ class RedisCache:
 
     @property
     def available(self) -> bool:
-        """Whether Redis is configured and reachable."""
-        if self._available is None:
-            self._check_connection()
-        return bool(self._available)
+        """Configuration check only; never perform network I/O on the event loop."""
+        return self._enabled
 
-    def _check_connection(self) -> None:
-        if not self._enabled:
-            self._available = False
-            return
-        try:
-            import redis  # type: ignore
-
-            client = redis.Redis.from_url(
-                self._url,
-                db=self._db,
-                socket_timeout=self._timeout,
-                socket_connect_timeout=self._timeout,
-                decode_responses=True,
+    def _connection(self):
+        if self._client is None:
+            import redis.asyncio as redis
+            self._client = redis.Redis.from_url(
+                self._url, db=self._db, socket_timeout=self._timeout,
+                socket_connect_timeout=self._timeout, decode_responses=True,
             )
-            client.ping()
-            self._client = client
-            self._available = True
-        except Exception as exc:  # pragma: no cover - depends on env
-            logger.warning("Redis unavailable, falling back to in-memory cache: %s", exc)
-            self._available = False
+        return self._client
 
     def _key(self, key: str) -> str:
         return f"{self._prefix}{key}"
@@ -84,7 +70,7 @@ class RedisCache:
         if not self.available:
             return None
         try:
-            raw = self._client.get(self._key(key))
+            raw = await self._connection().get(self._key(key))
             if raw is None:
                 return None
             return json.loads(raw)
@@ -98,7 +84,7 @@ class RedisCache:
             return
         try:
             ttl = ttl_seconds or self._ttl
-            self._client.set(self._key(key), json.dumps(value, default=_json_default), ex=ttl)
+            await self._connection().set(self._key(key), json.dumps(value, default=_json_default), ex=ttl)
         except Exception as exc:
             logger.warning("Redis set failed for %s: %s", key, exc)
 
@@ -107,9 +93,8 @@ class RedisCache:
         if not self.available:
             return
         try:
-            keys = self._client.keys(f"{self._prefix}*")
-            if keys:
-                self._client.delete(*keys)
+            async for key in self._connection().scan_iter(match=f"{self._prefix}*", count=100):
+                await self._connection().unlink(key)
         except Exception as exc:
             logger.warning("Redis clear failed: %s", exc)
 

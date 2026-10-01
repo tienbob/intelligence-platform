@@ -1,8 +1,13 @@
 import { useEffect, useRef } from 'react';
 
+// Elements that can receive focus while Tab-trapped inside the dialog.
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 // Styled replacement for window.confirm: accessible alertdialog with
-// Escape-to-close, click-outside-to-cancel, and focus moved to the safe
-// (Cancel) action when opened.
+// Escape-to-close, click-outside-to-cancel, focus moved to the safe
+// (Cancel) action when opened, Tab containment while open, and focus
+// restored to the trigger on close (audit U03).
 export default function ConfirmDialog({
   open,
   title,
@@ -14,27 +19,58 @@ export default function ConfirmDialog({
   onCancel,
 }) {
   const cancelRef = useRef(null);
+  const dialogRef = useRef(null);
+  const previouslyFocused = useRef(null);
 
   useEffect(() => {
     if (!open) return undefined;
+    previouslyFocused.current = document.activeElement;
     cancelRef.current?.focus();
+
     function onKey(e) {
-      if (e.key === 'Escape') onCancel?.();
+      // While the action is running the dialog must not be dismissable — the
+      // buttons are disabled, so Escape/backdrop must not race the request.
+      if (busy) return;
+      if (e.key === 'Escape') {
+        onCancel?.();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      // Contain Tab/Shift+Tab within the dialog.
+      const nodes = dialogRef.current?.querySelectorAll(FOCUSABLE);
+      if (!nodes || nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
+
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // Return focus to the trigger so keyboard users aren't dropped at the
+      // top of the page.
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open, busy, onCancel]);
 
   if (!open) return null;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={onCancel}
+      onClick={busy ? undefined : onCancel}
     >
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
+        aria-busy={busy}
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-message"
         className="card max-w-md w-full bg-surface-container-low"

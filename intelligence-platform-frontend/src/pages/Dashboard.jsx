@@ -1,3 +1,4 @@
+import { startPolling } from '../services/polling';
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getMarketOverview, getAlerts, getMarketIndices, getTopMovers } from '../services/api';
@@ -9,52 +10,56 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [market, setMarket] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [indices, setIndices] = useState([]);
+  const [indexData, setIndexData] = useState(null);
+  const indices = indexData?.indices || [];
+  const [settledSections, setSettledSections] = useState({});
   const [topMovers, setTopMovers] = useState([]);
 
-  const loadData = useCallback(async () => {
+  const [failedSections, setFailedSections] = useState([]);
+
+  const [retryVersion, setRetryVersion] = useState(0);
+  const loadData = useCallback(async (active) => {
+    const failures = [];
+
     // Fire each request independently so every section renders as soon as its
     // own response returns — a slow/failing one (e.g. rate-limited indices)
-    // never blocks the others.
-    getMarketOverview()
-      .then(setMarket)
-      .catch(() => setMarket(null));
+    // never blocks the others. Failures are collected so the page can surface
+    // one actionable banner: previously a dead backend rendered "—"
+    // placeholders indistinguishable from "no data" (audit U1).
+    const section = (name, request, apply, fallback) =>
+      request()
+        .then((data) => { if (active()) apply(data); })
+        .catch(() => {
+          failures.push(name);
+          if (active()) apply(fallback);
+        })
+        .finally(() => {
+          if (active()) setSettledSections(previous => ({ ...previous, [name]: true }));
+        });
 
-    getAlerts({ limit: 5 })
-      .then((d) => setAlerts(d?.alerts || []))
-      .catch(() => setAlerts([]));
+    await Promise.allSettled([
+      section('market overview', getMarketOverview, setMarket, null),
+      section('alerts', () => getAlerts({ limit: 5 }), (d) => setAlerts(d?.alerts || []), []),
+      section('market indices', getMarketIndices, setIndexData, null),
+      section('top movers', getTopMovers, (d) => setTopMovers(d?.top_movers || []), []),
+    ]);
 
-    getMarketIndices()
-      .then((d) => setIndices(d?.indices || []))
-      .catch(() => setIndices([]));
-
-    getTopMovers()
-      .then((d) => setTopMovers(d?.top_movers || []))
-      .catch(() => setTopMovers([]));
+    if (active()) setFailedSections(failures);
   }, []);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadData();
-    }, 0);
-    const interval = REFRESH_DASHBOARD_MS > 0 ? setInterval(loadData, REFRESH_DASHBOARD_MS) : null;
-    return () => {
-      clearTimeout(timer);
-      if (interval) clearInterval(interval);
-    };
-  }, [loadData]);
+  useEffect(() => startPolling(loadData, REFRESH_DASHBOARD_MS), [loadData, retryVersion]);
 
   const trend = market?.market?.trend || '—';
   const volatility = market?.market?.volatility || '—';
-  const vix = market?.macro_environment?.vix || '—';
-  const vixPct = market?.macro_environment?.vix ? Math.min(100, (market.macro_environment.vix / 40) * 100) : 45;
+  const vix = market?.macro_environment?.vix ?? '—';
+  const vixPct = market?.macro_environment?.vix != null ? Math.min(100, (market.macro_environment.vix / 40) * 100) : 0;
 
   return (
     <div>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div>
           <h1 className="text-4xl font-bold text-on-surface">Market Dashboard</h1>
-          <p className="text-sm text-on-surface-variant mt-1">Real-time overview & macro intelligence.{REFRESH_DASHBOARD_MS > 0 ? ` Auto-refreshes every ${REFRESH_DASHBOARD_MS / 1000}s.` : ''}</p>
+          <p className="text-sm text-on-surface-variant mt-1">Market overview & macro intelligence.{REFRESH_DASHBOARD_MS > 0 ? ` Auto-refreshes every ${REFRESH_DASHBOARD_MS / 1000}s.` : ''}</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary flex items-center gap-2" onClick={() => toast('Export feature coming soon', 'info')}>
@@ -65,6 +70,13 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {failedSections.length > 0 && (
+        <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
+          <p>Could not load: {failedSections.join(', ')}. The sections below may be incomplete.</p>
+          <button className="btn-secondary btn-sm" onClick={() => { setFailedSections([]); setRetryVersion(v => v + 1); }}>Retry</button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-gutter">
         {/* Macro Snapshot */}
@@ -103,10 +115,19 @@ export default function Dashboard() {
           <h3 className="text-lg font-semibold text-on-surface mb-4 border-b border-outline-variant pb-2">
             Major Indices
           </h3>
+          {indices.length > 0 && (
+            <div role="status" className="mb-3 text-xs text-on-surface-variant">
+              {indexData.stale && <p className="text-secondary font-semibold">Showing previously retrieved prices. The latest refresh failed.</p>}
+              {indexData.partial && <p>Some indices are unavailable.</p>}
+              {indexData.fetched_at ? (
+                <p>Retrieved <time dateTime={indexData.fetched_at}>{new Date(indexData.fetched_at).toLocaleString()}</time>. Quotes may be delayed.</p>
+              ) : <p>Retrieval time unavailable. Quotes may be delayed.</p>}
+            </div>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 flex-1">
             {indices.length > 0 ? (
               indices.map((idx) => (
-                <div key={idx.name} className="bg-surface-variant rounded p-3 border border-outline-variant flex flex-col justify-between hover:border-secondary transition-colors cursor-pointer group">
+                <div key={idx.name} className="bg-surface-variant rounded p-3 border border-outline-variant flex flex-col justify-between hover:border-secondary transition-colors group">
                   <p className="text-xs text-on-surface-variant group-hover:text-on-surface transition-colors">{idx.name}</p>
                   <p className="text-base font-medium text-on-surface mt-2 data-font">
                     {idx.price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -120,7 +141,7 @@ export default function Dashboard() {
             ) : (
               <div className="col-span-4 py-8 text-center text-on-surface-variant">
                 <span className="material-symbols-outlined text-4xl mb-2 block">show_chart</span>
-                <p>Index data unavailable. Provider may be offline.</p>
+                <p>{!settledSections['market indices'] ? 'Loading market indices…' : 'Index data unavailable. Provider may be offline.'}</p>
               </div>
             )}
           </div>
@@ -166,7 +187,7 @@ export default function Dashboard() {
                     </tr>
                   ))
                 ) : (
-                  <tr><td colSpan={5} className="py-8 text-center text-on-surface-variant">No top movers data available.</td></tr>
+                  <tr><td colSpan={5} className="py-8 text-center text-on-surface-variant">{!settledSections['top movers'] ? 'Loading top movers…' : 'No top movers data available.'}</td></tr>
                 )}
               </tbody>
             </table>
@@ -198,8 +219,8 @@ export default function Dashboard() {
                 <div className="p-3 bg-surface-variant border border-outline-variant rounded flex items-start gap-3">
                   <span className="material-symbols-outlined text-secondary text-lg mt-0.5">notifications_active</span>
                   <div>
-                    <p className="text-sm font-semibold text-on-surface">No Active Alerts</p>
-                    <p className="text-xs text-on-surface-variant mt-1">System monitoring is active.</p>
+                    <p className="text-sm font-semibold text-on-surface">{!settledSections.alerts ? 'Loading alerts…' : failedSections.includes('alerts') ? 'Alerts unavailable' : 'No Active Alerts'}</p>
+                    <p className="text-xs text-on-surface-variant mt-1">{!settledSections.alerts ? 'Fetching your latest alerts.' : failedSections.includes('alerts') ? 'Use Retry above to load alerts.' : 'No alerts to display.'}</p>
                   </div>
                 </div>
               )}

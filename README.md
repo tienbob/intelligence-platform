@@ -55,6 +55,15 @@ cp .env.example .env          # then fill in provider API keys
 docker compose up --build     # db, redis, python :8001, rails :3000, frontend :3000
 ```
 
+Compose defaults to `ENVIRONMENT=development` for Python and Rails, including
+Rails migrations. For production, set `ENVIRONMENT=production`, real
+`SECRET_KEY_BASE`, `JWT_SECRET_KEY`, and `PYTHON_SERVICE_KEY` values, and
+`AUTH_ENABLED=true` in the root `.env`. The gateway validates these settings
+when migrations boot Rails as well as when the API starts.
+Local Compose builds include Rails development gems. For production builds,
+also set `RAILS_BUNDLE_WITHOUT=development:test` to exclude development and test
+gems. Rebuild the Rails images after changing this setting.
+
 ## Domain Enablement
 
 Enabled domains come from an explicit allow-list — discovery on disk does

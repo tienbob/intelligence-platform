@@ -27,6 +27,13 @@ class AlertResponse(BaseModel):
     alert_type: str
     severity: str = "medium"
     message: str
+    # True only for rows the caller owns (or admin) — gates the FE's
+    # Dismiss action. System rows are visible but read-only.
+    can_manage: bool = False
+    # Read state for the current viewer. Exposed so the feed can offer an
+    # explicit Unread/All view instead of hiding read rows client-side
+    # (audit F03).
+    is_read: bool = False
 
     model_config = {"from_attributes": True}
 

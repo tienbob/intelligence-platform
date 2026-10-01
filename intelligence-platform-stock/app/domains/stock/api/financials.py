@@ -22,21 +22,28 @@ router = APIRouter(prefix="/financials", tags=["financials"])
 
 
 async def _get_company(db: AsyncSession, ticker: str) -> Company:
-    result = await db.execute(select(Company).where(Company.ticker == ticker.upper()))
-    company = result.scalar_one_or_none()
-    if not company:
-        # Auto-ingest the ticker so direct navigation self-populates
-        from app.domains.stock.api.v1.stocks import _auto_ingest_ticker
-        company = await _auto_ingest_ticker(ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+    """Resolve a ticker, scheduling durable ingestion when it is untracked.
+
+    Used by statements, metrics and technical indicators, so one change here
+    keeps every financial route off the ingestion path (audit O02). The lazy
+    import also used to name the nonexistent `api.v1.stocks` module, which
+    raised ModuleNotFoundError on every unknown ticker (audit F01).
+    """
+    from app.domains.stock.services.company_resolution import (
+        get_or_schedule_missing,
+        ingestion_pending,
+    )
+
+    company = await get_or_schedule_missing(ticker, db)
+    if company is None:
+        raise ingestion_pending(ticker)
     return company
 
 
 @router.get("/{ticker}/statements", response_model=list[FinancialStatementResponse])
 async def get_financial_statements(
     ticker: str,
-    limit: int = Query(default=8, le=40),
+    limit: int = Query(default=8, ge=1, le=40),
     db: AsyncSession = Depends(get_db),
 ):
     """Get financial statements for a company."""

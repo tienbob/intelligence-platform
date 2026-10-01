@@ -124,3 +124,17 @@
     font-family: "JetBrains Mono", monospace;
   }
 }
+
+/* Respect the OS motion preference: collapse every animation/transition
+   (pulse dots, slide-in toasts, hover transitions) for users who ask for
+   reduced motion (audit U08). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

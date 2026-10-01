@@ -16,7 +16,7 @@ export default function Landing() {
           </h1>
           <p className="text-lg md:text-xl text-on-surface-variant max-w-2xl mx-auto mb-10">
             Real-time market data, fundamental analysis, AI research, risk scoring,
-            and portfolio optimization — all in one intelligent platform.
+            and strategy backtesting — all in one intelligent platform.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <Link to="/register" className="btn-primary text-base px-6 py-3">Get Started Free</Link>
@@ -34,7 +34,7 @@ export default function Landing() {
           {[
             { icon: 'monitoring', title: 'Market Intelligence', desc: 'Track stocks, indices, news, events, and market movements in real time.' },
             { icon: 'psychology_alt', title: 'AI Research & Scoring', desc: 'LLM-powered analysis with evidence-backed investment scores and risk ratings.' },
-            { icon: 'account_balance_wallet', title: 'Portfolio Optimization', desc: 'Optimize allocations, backtest strategies, and monitor portfolio drift.' },
+            { icon: 'history', title: 'Backtesting & Screening', desc: 'Backtest strategies against point-in-time snapshots and screen AI-scored opportunities.' },
           ].map((f) => (
             <div key={f.title} className="card p-6 text-center hover:shadow-lg transition-shadow">
               <span className="material-symbols-outlined text-4xl text-primary mb-3">{f.icon}</span>
@@ -50,7 +50,7 @@ export default function Landing() {
         <div className="card p-10 bg-primary-container/20 border-primary/20">
           <h2 className="text-2xl md:text-3xl font-bold text-on-surface mb-4">Ready to see your dashboard?</h2>
           <p className="text-on-surface-variant mb-8 max-w-xl mx-auto">
-            Sign in to access your market dashboard, portfolio, backtests, and alerts.
+            Sign in to access your market dashboard, opportunities, backtests, and alerts.
           </p>
           <Link to="/login" className="btn-primary px-6 py-3">Sign In to Dashboard</Link>
         </div>

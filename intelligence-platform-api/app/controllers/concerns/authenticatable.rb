@@ -26,6 +26,8 @@ module Authenticatable
     payload = JwtService.decode_safe(token)
     raise AuthenticationError if payload.nil? || payload["type"] != "access"
 
+    raise AuthenticationError unless JwtService.active_session(payload)
+
     @current_user = User.find_by(id: payload["sub"])
     raise AuthenticationError unless @current_user&.is_active?
 

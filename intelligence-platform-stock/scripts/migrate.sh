@@ -54,8 +54,8 @@ PY
 case "$ACTION" in
   stamp)
     echo "Existing Rails schema detected."
-    echo "Stamping Alembic at head..."
-    alembic stamp head
+    echo "Refusing to stamp an unverified schema. Reconcile the legacy schema and explicitly stamp its verified baseline before rerunning." >&2
+    exit 1
     ;;
 
   upgrade)

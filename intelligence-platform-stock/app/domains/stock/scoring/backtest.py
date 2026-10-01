@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.domains.stock.config import get_stock_config
 from app.core.database import commit_session
@@ -135,6 +136,59 @@ def _mark_to_market(
     return portfolio_value
 
 
+# Strategies whose trade decisions read investment-score history.
+SCORE_DRIVEN_STRATEGIES = frozenset({"score_threshold", "portfolio_optimizer"})
+
+
+def compute_snapshot_coverage(
+    snapshot: BacktestSnapshot | None,
+    strategy: str,
+    benchmark_source: str = "live",
+) -> dict[str, Any]:
+    """Describe which DECISION inputs of a run are pinned vs read live (F12).
+
+    Backtest snapshots capture prices (and benchmark prices) as of their
+    ``as_of`` date plus the *latest* score per ticker — but NOT full score
+    history or fundamentals/news/events. Score-driven strategies therefore
+    resolve scores from live (date-bounded) tables even on a pinned run, and
+    a benchmark ticker missing from the snapshot falls back to live tables.
+
+    The report is stored on the run so the API/UI can say "partially pinned"
+    instead of implying full reproducibility (audit F12). Evaluation phases
+    (score/AI evaluation) deliberately read live data — they measure
+    outcomes, they do not drive decisions.
+    """
+    if snapshot is None:
+        live = ["prices", "benchmark"]
+        if strategy in SCORE_DRIVEN_STRATEGIES:
+            live.append("score_history")
+        return {
+            "mode": "unpinned",
+            "snapshot_id": None,
+            "snapshot_as_of": None,
+            "pinned": [],
+            "live": live,
+        }
+
+    pinned = ["prices"]
+    live: list[str] = []
+    if strategy in SCORE_DRIVEN_STRATEGIES:
+        live.append("score_history")
+    if benchmark_source == "snapshot":
+        pinned.append("benchmark")
+    elif benchmark_source == "live":
+        live.append("benchmark")
+    # benchmark_source == "none": no benchmark computed at all — neither list.
+
+    return {
+        "mode": "partially_pinned" if live else "pinned",
+        "snapshot_id": snapshot.id,
+        "snapshot_as_of": snapshot.as_of.isoformat() if snapshot.as_of else None,
+        "pinned": pinned,
+        "live": live,
+    }
+
+
 class BacktestEngine:
     """
     Implements Phase 9 backtesting features.
@@ -150,6 +204,23 @@ class BacktestEngine:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def _prices_by_company(self, company_ids, end_date, start_date=None):
+        """Load daily histories in bounded ID batches, preserving chronological order."""
+        histories = {}
+        for offset in range(0, len(company_ids), 500):
+            query = (select(StockPrice)
+                     .options(load_only(StockPrice.company_id, StockPrice.timestamp,
+                                        StockPrice.close, StockPrice.volume, raiseload=True))
+                     .where(StockPrice.company_id.in_(company_ids[offset:offset + 500]),
+                            StockPrice.interval == "1d", StockPrice.timestamp <= end_date)
+                     .order_by(StockPrice.company_id, StockPrice.timestamp, StockPrice.id))
+            if start_date is not None:
+                query = query.where(StockPrice.timestamp >= start_date)
+            result = await self.session.execute(query)
+            for price in result.scalars().all():
+                histories.setdefault(price.company_id, []).append(price)
+        return histories
+
     # ── Point-in-time dataset generation ──────────────────────────
 
     async def create_snapshot(
@@ -163,8 +234,8 @@ class BacktestEngine:
         """
         Build a point-in-time dataset snapshot (Section 162).
 
-        Captures prices, scores, fundamentals, events, and news as of a
-        specific date. This prevents look-ahead bias in backtesting.
+        Captures daily prices and latest scores as of the supplied date.
+        Other decision-input coverage is disclosed on each backtest run.
         """
         # Resolve companies
         company_query = select(Company)
@@ -175,40 +246,30 @@ class BacktestEngine:
         companies_result = await self.session.execute(company_query)
         companies = companies_result.scalars().all()
 
-        # Capture prices as of the snapshot date
-        prices: dict[str, Any] = {}
-        for company in companies:
-            price_result = await self.session.execute(
-                select(StockPrice)
-                .where(StockPrice.company_id == company.id)
-                .where(StockPrice.interval == "1d")
-                .where(StockPrice.timestamp <= as_of)
-                .order_by(StockPrice.timestamp)
-            )
-            price_rows = price_result.scalars().all()
-            if price_rows:
-                prices[company.ticker] = [
-                    {
-                        "timestamp": p.timestamp.isoformat(),
-                        "close": p.close,
-                        "volume": p.volume,
-                    }
-                    for p in price_rows
-                ]
+        company_ids = [company.id for company in companies]
+        histories = await self._prices_by_company(company_ids, as_of)
+        prices = {
+            company.ticker: [{"timestamp": p.timestamp.isoformat(), "close": p.close, "volume": p.volume}
+                             for p in histories[company.id]]
+            for company in companies if company.id in histories
+        }
 
-        # Capture scores as of the snapshot date
         scores: dict[str, Any] = {}
-        for company in companies:
+        ticker_by_id = {company.id: company.ticker for company in companies}
+        for offset in range(0, len(company_ids), 500):
             score_result = await self.session.execute(
                 select(InvestmentScore)
-                .where(InvestmentScore.company_id == company.id)
-                .where(InvestmentScore.timestamp <= as_of)
-                .order_by(desc(InvestmentScore.timestamp))
-                .limit(1)
+                .options(load_only(InvestmentScore.company_id, InvestmentScore.timestamp,
+                                   InvestmentScore.overall_score, InvestmentScore.recommendation,
+                                   InvestmentScore.scoring_model, InvestmentScore.scoring_version,
+                                   raiseload=True))
+                .where(InvestmentScore.company_id.in_(company_ids[offset:offset + 500]),
+                       InvestmentScore.timestamp <= as_of)
+                .distinct(InvestmentScore.company_id)
+                .order_by(InvestmentScore.company_id, InvestmentScore.timestamp.desc(), InvestmentScore.id.desc())
             )
-            score = score_result.scalar_one_or_none()
-            if score:
-                scores[company.ticker] = {
+            for score in score_result.scalars().all():
+                scores[ticker_by_id[score.company_id]] = {
                     "timestamp": score.timestamp.isoformat(),
                     "overall_score": score.overall_score,
                     "recommendation": score.recommendation,
@@ -351,6 +412,8 @@ class BacktestEngine:
             self.session.add(run)
             await self.session.flush()
 
+        run_id = run.id
+
         # Resolve the snapshot up front (if any) so a bad snapshot_id fails
         # the run the same way a missing price range does, rather than
         # silently falling back to live data.
@@ -430,12 +493,22 @@ class BacktestEngine:
             # Benchmark comparison — sourced from the snapshot when the run
             # is snapshot-pinned, so the benchmark side doesn't retain
             # look-ahead access to live tables the strategy side was denied.
-            benchmark = await self._compare_benchmark(
+            benchmark, benchmark_source = await self._compare_benchmark(
                 run.id, equity_curve, benchmark_ticker, start_date, end_date,
                 snapshot=snapshot,
             )
             if benchmark:
                 self.session.add(benchmark)
+
+            # Record exactly which decision inputs were pinned vs read live
+            # (audit F12). Snapshots capture prices/benchmark but NOT score
+            # history, so score-driven strategies are honestly marked
+            # "partially_pinned" instead of implying full reproducibility.
+            run.snapshot_coverage = compute_snapshot_coverage(
+                snapshot=snapshot,
+                strategy=strategy,
+                benchmark_source=benchmark_source,
+            )
 
             # Score evaluation
             await self._evaluate_scores(run.id, start_date, end_date, tickers)
@@ -449,10 +522,15 @@ class BacktestEngine:
             return run
 
         except Exception as exc:
-            run.status = "failed"
-            run.error_message = str(exc)
-            await commit_session(self.session)
-            logger.error("Backtest run %d failed: %s", run.id, exc)
+            # Discard partial trades/results and reset an aborted transaction
+            # before recording failure. Queued runs already exist durably.
+            await self.session.rollback()
+            failed_run = await self.session.get(BacktestRun, run_id)
+            if failed_run is not None:
+                failed_run.status = "failed"
+                failed_run.error_message = str(exc)
+                await commit_session(self.session)
+            logger.exception("Backtest run %d failed", run_id)
             raise
 
     async def _load_price_data(
@@ -470,17 +548,10 @@ class BacktestEngine:
         companies_result = await self.session.execute(company_query)
         companies = companies_result.scalars().all()
 
+        histories = await self._prices_by_company([c.id for c in companies], end_date, start_date)
         price_data: dict[str, pd.DataFrame] = {}
         for company in companies:
-            price_result = await self.session.execute(
-                select(StockPrice)
-                .where(StockPrice.company_id == company.id)
-                .where(StockPrice.interval == "1d")
-                .where(StockPrice.timestamp >= start_date)
-                .where(StockPrice.timestamp <= end_date)
-                .order_by(StockPrice.timestamp)
-            )
-            price_rows = price_result.scalars().all()
+            price_rows = histories.get(company.id, [])
             if not price_rows:
                 logger.warning(
                     "Backtest: requested ticker %s has no daily price data "
@@ -1117,26 +1188,23 @@ class BacktestEngine:
         drawdown = (values - running_max) / running_max
         max_drawdown = float(abs(drawdown.min())) if len(drawdown) > 0 else 0.0
 
-        # Win rate (from trades)
-        win_rate = None
-        if trades:
-            buy_trades = [t for t in trades if t.action == "BUY"]
-            sell_trades = [t for t in trades if t.action == "SELL"]
-            if buy_trades and sell_trades:
-                # Simple proxy: compare avg buy vs avg sell price per ticker
-                wins = 0
-                total = 0
-                for ticker in set(t.ticker for t in trades):
-                    buys = [t for t in buy_trades if t.ticker == ticker]
-                    sells = [t for t in sell_trades if t.ticker == ticker]
-                    if buys and sells:
-                        avg_buy = sum(b.price for b in buys) / len(buys)
-                        avg_sell = sum(s.price for s in sells) / len(sells)
-                        total += 1
-                        if avg_sell > avg_buy:
-                            wins += 1
-                if total > 0:
-                    win_rate = wins / total
+        # Realized outcomes use average-cost accounting, weighted by shares.
+        # Each sell execution is one closed outcome; breakeven is not a win.
+        positions: dict[str, tuple[float, float]] = {}
+        wins = closed = 0
+        for trade in trades:
+            quantity, cost = positions.get(trade.ticker, (0.0, 0.0))
+            shares = float(trade.shares)
+            if trade.action == "BUY":
+                positions[trade.ticker] = (quantity + shares, cost + shares * trade.price)
+            elif trade.action == "SELL" and quantity > 0:
+                sold = min(shares, quantity)
+                average_cost = cost / quantity
+                closed += 1
+                wins += int(trade.price > average_cost)
+                remaining = quantity - sold
+                positions[trade.ticker] = (remaining, remaining * average_cost)
+        win_rate = wins / closed if closed else None
 
         return BacktestResult(
             run_id=run_id,
@@ -1162,7 +1230,7 @@ class BacktestEngine:
         start_date: datetime,
         end_date: datetime,
         snapshot: BacktestSnapshot | None = None,
-    ) -> BacktestBenchmark | None:
+    ) -> tuple["BacktestBenchmark | None", str]:
         """Compare strategy performance against a benchmark (Section 162).
 
         When ``snapshot`` is supplied, benchmark prices are sourced from the
@@ -1170,6 +1238,10 @@ class BacktestEngine:
         tables (which would give the benchmark side look-ahead access the
         strategy side was denied). Live tables are only used as a fallback
         when the benchmark ticker wasn't captured in the snapshot.
+
+        Returns ``(benchmark, source)`` where source is ``"snapshot"``,
+        ``"live"`` or ``"none"`` (no benchmark computed) — recorded on the
+        run as part of its snapshot-coverage disclosure (audit F12).
         """
         ticker = benchmark_ticker.upper()
 
@@ -1201,6 +1273,10 @@ class BacktestEngine:
                         snapshot.id,
                     )
 
+        # Where the benchmark series will come from — disclosed on the run
+        # via compute_snapshot_coverage (audit F12).
+        benchmark_source = "snapshot" if benchmark_points is not None else "live"
+
         # ── Source 2: live tables (fallback / no snapshot) ───────
         if benchmark_points is None:
             benchmark_result = await self.session.execute(
@@ -1209,7 +1285,7 @@ class BacktestEngine:
             benchmark_company = benchmark_result.scalar_one_or_none()
             if not benchmark_company:
                 logger.warning("Benchmark %s not found", ticker)
-                return None
+                return None, "none"
 
             price_result = await self.session.execute(
                 select(StockPrice)
@@ -1221,7 +1297,7 @@ class BacktestEngine:
             )
             price_rows = price_result.scalars().all()
             if len(price_rows) < 2:
-                return None
+                return None, "none"
             benchmark_points = [(p.timestamp, p.close) for p in price_rows]
 
         benchmark_start = benchmark_points[0][1]
@@ -1230,7 +1306,7 @@ class BacktestEngine:
 
         # Strategy return
         if not equity_curve:
-            return None
+            return None, "none"
         strategy_start = equity_curve[0]["value"]
         strategy_end = equity_curve[-1]["value"]
         strategy_return = (strategy_end - strategy_start) / strategy_start if strategy_start else 0.0
@@ -1293,7 +1369,7 @@ class BacktestEngine:
             tracking_error=round(tracking_error, 6) if tracking_error is not None else None,
             information_ratio=round(information_ratio, 6) if information_ratio is not None else None,
             outperformed=strategy_return > benchmark_return,
-        )
+        ), benchmark_source
 
     # ── Score evaluation ──────────────────────────────────────────
 
@@ -1560,8 +1636,14 @@ class BacktestEngine:
 
         result = await self.session.execute(
             select(BacktestRun)
+            .options(load_only(
+                BacktestRun.id, BacktestRun.name, BacktestRun.strategy,
+                BacktestRun.status, BacktestRun.start_date, BacktestRun.end_date,
+                BacktestRun.initial_capital, BacktestRun.error_message,
+                BacktestRun.snapshot_coverage, raiseload=True,
+            ))
             .where(visible_to_actor(BacktestRun.user_id, actor))
-            .order_by(desc(BacktestRun.created_at))
+            .order_by(desc(BacktestRun.created_at), desc(BacktestRun.id))
             .offset(offset)
             .limit(limit)
         )
@@ -1581,12 +1663,13 @@ class BacktestEngine:
         )
         return result.scalar_one_or_none()
 
-    async def get_trades(self, run_id: int, limit: int = 100) -> list[BacktestTrade]:
+    async def get_trades(self, run_id: int, limit: int = 100, offset: int = 0) -> list[BacktestTrade]:
         """Get trades for a run."""
         result = await self.session.execute(
             select(BacktestTrade)
             .where(BacktestTrade.run_id == run_id)
-            .order_by(BacktestTrade.trade_date)
+            .order_by(BacktestTrade.trade_date, BacktestTrade.id)
+            .offset(offset)
             .limit(limit)
         )
         return list(result.scalars().all())
@@ -1621,7 +1704,11 @@ class BacktestEngine:
         """List backtest snapshots."""
         result = await self.session.execute(
             select(BacktestSnapshot)
-            .order_by(desc(BacktestSnapshot.as_of))
+            .options(load_only(
+                BacktestSnapshot.id, BacktestSnapshot.name, BacktestSnapshot.as_of,
+                BacktestSnapshot.description, raiseload=True,
+            ))
+            .order_by(desc(BacktestSnapshot.as_of), desc(BacktestSnapshot.id))
             .offset(offset)
             .limit(limit)
         )

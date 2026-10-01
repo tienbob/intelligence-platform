@@ -23,7 +23,7 @@ async def update_market_data() -> None:
 
     async with async_session_factory() as session:
         result = await session.execute(
-            select(Company.ticker).limit(100)
+            select(Company.ticker).order_by(Company.id)
         )
         tickers = result.scalars().all()
 

@@ -20,8 +20,8 @@ router = APIRouter(prefix="/events", tags=["events"])
 async def list_events(
     ticker: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
-    limit: int = Query(default=50, le=200),
-    offset: int = Query(default=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """List market events (lean rows: what the FE table/timeline renders)."""

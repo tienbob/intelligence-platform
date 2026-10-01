@@ -49,7 +49,9 @@ class ResponseCache:
     async def get(self, key: str) -> Any | None:
         # Prefer shared Redis cache when reachable.
         if self._redis is not None and self._redis.available:
-            return await self._redis.get(key)
+            value = await self._redis.get(key)
+            if value is not None:
+                return value
 
         # In-memory fallback.
         async with self._lock:
@@ -64,7 +66,6 @@ class ResponseCache:
         # Prefer shared Redis cache when reachable.
         if self._redis is not None and self._redis.available:
             await self._redis.set(key, value, ttl_seconds=self._ttl)
-            return
 
         # In-memory fallback.
         async with self._lock:

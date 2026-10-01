@@ -10,6 +10,7 @@ Implements:
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -266,7 +267,11 @@ def get_actor(request: Any) -> dict[str, Any]:
         role = request.headers.get("X-User-Role") if request is not None else None
     except AttributeError:
         role = None
-    return {"user_id": user_id, "role": (role or "SYSTEM").upper()}
+    # A missing/blank role must never imply SYSTEM (admin-equivalent) — that
+    # would upgrade an identity-less request to full visibility (audit S01).
+    # Rails always forwards the acting role; header-less internal callers fall
+    # back to the least-privileged role instead.
+    return {"user_id": user_id, "role": (role or "USER").upper()}
 
 
 def is_admin_actor(actor: dict[str, Any] | None) -> bool:
@@ -353,21 +358,77 @@ def validate_date_range(start: datetime, end: datetime) -> None:
 
 
 # ── Idempotency-Key support (Architecture §101) ──────────────────
-
-# In-memory idempotency store: maps idempotency_key → (status_code, response_body, expires_at)
+#
+# Idempotency is checked before expensive work and stored after it completes.
+# Storage is two-tier (audit F04 remainder):
+#   1. Redis (shared, survives restarts/workers) when configured.
+#   2. The process-local dict as a transparent fallback (dev, Redis down).
+#
+# Both tiers use the same namespaced keys (actor + method + path + key +
+# body fingerprint), so behaviour is identical whichever tier serves.
+# check_idempotency/store_idempotency_result keep their signatures:
+# async store falls back to memory synchronously, so callers are unchanged.
 _idempotency_store: dict[str, tuple[int, dict[str, Any], float]] = {}
+
+# Outstanding fire-and-forget Redis mirrors (kept alive until they complete).
+_idempotency_pending: set = set()
+
+
+def _idempotency_redis():
+    """Shared Redis cache with a dedicated prefix for idempotency records."""
+    from app.core.redis_cache import RedisCache
+
+    return RedisCache(
+        prefix="mi:idempotency:",
+        ttl_seconds=86400,
+        enabled=True,  # RedisCache no-ops itself when REDIS_URL is unset
+    )
+
+
+class IdempotencyReplay(Exception):
+    """Raised when a request replays a stored idempotent result.
+
+    Carries the ORIGINAL status + payload so the replay response matches the
+    first response. Previously the stored body was re-raised as an
+    ``HTTPException`` detail, which the envelope middleware turned into
+    ``{"error": {"message": <body>}}`` — so a replay returned ``data.detail``
+    instead of the original ``data`` payload (audit F04).
+    """
+
+    def __init__(self, status_code: int, body: dict[str, Any], key: str):
+        self.status_code = status_code
+        self.body = body
+        self.key = key
+        super().__init__(f"Idempotency replay for {key}")
+
+
+def _idempotency_scope(request: Any) -> str:
+    """Actor + method + path namespace for an idempotency key.
+
+    Without the actor part, a key replayed by a different user returned the
+    first user's stored response (reproduced in the audit); without the path
+    part the same key could collide across endpoints.
+    """
+    actor = get_actor(request)
+    who = f"u{actor.get('user_id')}" if actor.get("user_id") is not None else "anon"
+    method = getattr(request, "method", "") or ""
+    path = getattr(getattr(request, "url", None), "path", "") or ""
+    return f"{who}:{method}:{path}"
 
 
 async def check_idempotency(request: Any) -> str | None:
     """
-    Check for an Idempotency-Key header on POST/PUT requests.
+    Validate an optional Idempotency-Key header (Architecture §101).
 
-    If the key has been seen before, return the cached response.
-    Otherwise, record the key and return None (proceed normally).
+    Returns the namespaced storage key (or ``None`` when no key was supplied)
+    so the caller stores its result under the same key. Raises
+    ``IdempotencyReplay`` when this (actor, route, key, body) tuple was already
+    processed.
 
-    Architecture §101: Idempotency-Key prevents duplicate processing
-    on expensive POST endpoints like /analysis/company and /portfolio/optimize.
+    Architecture §101: Idempotency-Key prevents duplicate processing on
+    expensive POST endpoints like /analysis/company and /portfolio/optimize.
     """
+    import hashlib
     import time
 
     from fastapi import Request as FastAPIRequest
@@ -375,30 +436,57 @@ async def check_idempotency(request: Any) -> str | None:
     if not isinstance(request, FastAPIRequest):
         return None
 
-    idempotency_key = request.headers.get("Idempotency-Key")
-    if not idempotency_key:
+    raw_key = request.headers.get("Idempotency-Key")
+    if not raw_key:
         return None  # No key provided — proceed normally
+
+    # Bind the key to the caller, the operation AND the request body, so a
+    # replayed key can never return another user's result and a changed body
+    # is treated as a new request (audit F04).
+    try:
+        body = await request.body()
+    except Exception:
+        body = b""
+    fingerprint = hashlib.sha256(body).hexdigest()[:32]
+    key = f"{_idempotency_scope(request)}:{raw_key}:{fingerprint}"
 
     now = time.monotonic()
 
-    # Clean expired entries
+    # Clean expired in-memory entries
     expired = [k for k, v in _idempotency_store.items() if v[2] < now]
     for k in expired:
         del _idempotency_store[k]
 
-    if idempotency_key in _idempotency_store:
-        status_code, body, _ = _idempotency_store[idempotency_key]
-        raise HTTPException(
-            status_code=status_code,
-            detail=body,
-            headers={"Idempotency-Key": idempotency_key, "Idempotency-Replayed": "true"},
-        )
+    # Redis first (shared across workers/restarts), then the local fallback.
+    stored = await _idempotency_redis().get(key)
+    if stored is not None:
+        raise IdempotencyReplay(int(stored["status_code"]), stored["body"], raw_key)
 
-    return idempotency_key
+    if key in _idempotency_store:
+        status_code, stored_body, _ = _idempotency_store[key]
+        raise IdempotencyReplay(status_code, stored_body, raw_key)
+
+    return key
 
 
 def store_idempotency_result(key: str, status_code: int, body: dict[str, Any], ttl_seconds: int = 86400) -> None:
-    """Store the result of an idempotent operation."""
+    """Store the result of an idempotent operation (key from check_idempotency).
+
+    Writes through to Redis when available and always keeps the in-memory
+    fallback in sync, so a later Redis outage does not lose recent records.
+    """
     import time
 
     _idempotency_store[key] = (status_code, body, time.monotonic() + ttl_seconds)
+    try:
+        record = {"status_code": status_code, "body": body}
+        asyncio.get_event_loop()
+        task = asyncio.ensure_future(
+            _idempotency_redis().set(key, record, ttl_seconds=ttl_seconds)
+        )
+        # Fire-and-forget must not warn on loop shutdown; keep a reference
+        # until the write completes.
+        _idempotency_pending.add(task)
+        task.add_done_callback(_idempotency_pending.discard)
+    except RuntimeError:
+        pass  # no running loop (tests/sync contexts) — memory store suffices

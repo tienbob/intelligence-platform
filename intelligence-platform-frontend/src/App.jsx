@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
+import PageTitle from './components/PageTitle';
 import RequireAuth from './components/RequireAuth';
 
 // Route-level code splitting: each page becomes its own chunk, loaded on
@@ -22,6 +23,7 @@ const Alerts = lazy(() => import('./pages/Alerts'));
 const Search = lazy(() => import('./pages/Search'));
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 function PageFallback() {
   return (
@@ -43,6 +45,7 @@ function Protected({ children }) {
 export default function App() {
   return (
     <Suspense fallback={<PageFallback />}>
+      <PageTitle />
       <Routes>
         {/* Public landing page */}
         <Route path="/" element={<Landing />} />
@@ -67,6 +70,9 @@ export default function App() {
         <Route path="/backtest" element={<Protected><Backtest /></Protected>} />
         <Route path="/alerts" element={<Protected><Alerts /></Protected>} />
         <Route path="/search" element={<Protected><Search /></Protected>} />
+
+        {/* Unknown URLs get a real page instead of a blank render (audit U06) */}
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </Suspense>
   );

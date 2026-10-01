@@ -59,8 +59,11 @@ export default function Register() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Full Name</label>
+            <label htmlFor="register-name" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Full Name</label>
             <input
+              id="register-name"
+              name="name"
+              autoComplete="name"
               className="input-field"
               type="text"
               value={name}
@@ -71,8 +74,11 @@ export default function Register() {
             />
           </div>
           <div>
-            <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Email</label>
+            <label htmlFor="register-email" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Email</label>
             <input
+              id="register-email"
+              name="email"
+              autoComplete="email"
               className="input-field"
               type="email"
               value={email}
@@ -82,8 +88,11 @@ export default function Register() {
             />
           </div>
           <div>
-            <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Password</label>
+            <label htmlFor="register-password" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Password</label>
             <input
+              id="register-password"
+              name="password"
+              autoComplete="new-password"
               className="input-field"
               type="password"
               value={password}
@@ -93,8 +102,11 @@ export default function Register() {
             />
           </div>
           <div>
-            <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Confirm Password</label>
+            <label htmlFor="register-confirm" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Confirm Password</label>
             <input
+              id="register-confirm"
+              name="confirm-password"
+              autoComplete="new-password"
               className="input-field"
               type="password"
               value={confirmPassword}

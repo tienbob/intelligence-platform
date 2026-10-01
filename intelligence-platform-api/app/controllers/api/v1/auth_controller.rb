@@ -4,12 +4,15 @@ module Api
   module V1
     # Authentication endpoints — Rails-owned system of record.
     #
-    #   POST /api/v1/auth/register  → 201 { access_token, refresh_token, token_type }
+    #   POST /api/v1/auth/register  → 201 tokens | 409 duplicate
+    #                                 | 422 invalid input (ApplicationController rescue)
     #   POST /api/v1/auth/login     → 200 { access_token, refresh_token, token_type }
     #   POST /api/v1/auth/refresh   → 200 { access_token, refresh_token, token_type }
     #   GET  /api/v1/auth/me        → 200 { id, email, name, role, is_active, ... }
     class AuthController < BaseController
       skip_before_action :authenticate_request!, only: %i[register login refresh]
+
+      before_action :throttle_auth!, only: %i[register login refresh]
 
       # POST /auth/register
       def register
@@ -49,7 +52,16 @@ module Api
         user = User.find_by(id: payload["sub"])
         raise Authenticatable::AuthenticationError if user.nil? || !user.is_active?
 
-        render json: JwtService.issue_token_pair(user)
+        pair = JwtService.rotate(user, payload)
+        raise Authenticatable::AuthenticationError unless pair
+        render json: pair
+      end
+
+      def logout
+        payload = JwtService.decode_safe(bearer_token)
+        session = payload && JwtService.active_session(payload)
+        session&.update!(revoked_at: Time.current)
+        head :no_content
       end
 
       # GET /auth/me
@@ -61,6 +73,23 @@ module Api
         end
 
         render json: user.as_json(only: %i[id email name role is_active created_at updated_at])
+      end
+      private
+
+      def throttle_auth!
+        # remote_ip uses Rails' trusted-proxy handling, not raw forwarded input.
+        allowed = AuthThrottle.allow?("auth:ip:#{request.remote_ip}", limit: 60)
+        if allowed && %w[login register].include?(action_name)
+          email = params[:email].to_s.strip.downcase
+          allowed = AuthThrottle.allow?("auth:account:#{email}", limit: 10)
+        end
+        return if allowed
+
+        response.set_header("Retry-After", "60")
+        render json: { detail: "Too many authentication attempts. Try again later." }, status: :too_many_requests
+      rescue ActiveRecord::ActiveRecordError
+        response.set_header("Retry-After", "5")
+        render json: { detail: "Authentication temporarily unavailable." }, status: :service_unavailable
       end
     end
   end

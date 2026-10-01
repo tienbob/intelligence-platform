@@ -28,7 +28,7 @@ async def ingest_fundamentals() -> None:
         # ticker string avoids implicit async attribute reloads and
         # MissingGreenlet errors.
         result = await session.execute(
-            select(Company.id, Company.ticker).limit(50)
+            select(Company.id, Company.ticker).order_by(Company.id)
         )
         companies = result.all()
 
