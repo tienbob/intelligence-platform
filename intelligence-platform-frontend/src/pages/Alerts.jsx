@@ -1,11 +1,16 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAlerts, createAlert, markAlertRead } from '../services/api';
 import { notifyAlertsChanged } from '../services/alertsSignal';
 import { useToast } from '../components/Toast';
 import StatusChip from '../components/StatusChip';
+import Pagination from '../components/Pagination';
 
 export default function Alerts() {
   const toast = useToast();
+  const version = useRef(0);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
   // Explicit Unread/All view: dismissal writes is_read=true server-side, so
@@ -22,18 +27,23 @@ export default function Alerts() {
   });
 
   const loadAlerts = useCallback(async () => {
+    const current = ++version.current;
+    setLoading(true);
     try {
-      const params = { limit: 50 };
+      const params = { limit: 51, offset: page * 50 };
       if (view === 'unread') params.unread_only = true;
       const data = await getAlerts(params);
-      setAlerts(data?.alerts || []);
+      if (current !== version.current) return;
+      setAlerts((data?.alerts || []).slice(0, 50));
+      setHasMore((data?.alerts || []).length > 50);
       setError(null);
     } catch (e) {
-      setError(e.message || 'Failed to load alerts');
-    }
-  }, [view]);
+      if (current === version.current) { setHasMore(false); setError(e.message || 'Failed to load alerts'); }
+    } finally { if (current === version.current) setLoading(false); }
+  }, [view, page]);
 
-  useEffect(() => { loadAlerts(); }, [loadAlerts]);
+  const invalidateRequests = useCallback(() => { version.current++; }, []);
+  useEffect(() => { loadAlerts(); return invalidateRequests; }, [loadAlerts, invalidateRequests]);
 
   async function handleDismiss(alert) {
     if (!alert?.can_manage) return;
@@ -42,6 +52,7 @@ export default function Alerts() {
       setAlerts((prev) => prev.filter((a) => a.id !== alert.id));
       // Keep the TopNav unread badge consistent with the feed (audit F03).
       notifyAlertsChanged();
+      await loadAlerts();
       toast('Alert dismissed', 'success');
     } catch {
       toast('Failed to dismiss alert', 'error');
@@ -93,7 +104,7 @@ export default function Alerts() {
                     ? 'bg-surface-container-highest text-on-surface'
                     : 'bg-surface-container-low text-on-surface-variant hover:text-on-surface'
                 }`}
-                onClick={() => setView(option)}
+                onClick={() => { setView(option); setPage(0); }}
               >
                 {option}
               </button>
@@ -122,8 +133,8 @@ export default function Alerts() {
           <h3 className="text-lg font-semibold text-on-surface mb-4">Create Alert</h3>
           <form onSubmit={handleCreate} className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Ticker (optional)</label>
-              <input
+              <label htmlFor="alerts-ticker-optional" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Ticker (optional)</label>
+              <input id="alerts-ticker-optional" name="alerts-ticker-optional"
                 className="input-field uppercase data-font"
                 placeholder="e.g. AAPL"
                 value={form.ticker}
@@ -131,8 +142,8 @@ export default function Alerts() {
               />
             </div>
             <div>
-              <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Alert Type</label>
-              <select
+              <label htmlFor="alerts-alert-type" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Alert Type</label>
+              <select id="alerts-alert-type" name="alerts-alert-type"
                 className="select-field"
                 value={form.alert_type}
                 onChange={(e) => setForm({ ...form, alert_type: e.target.value })}
@@ -148,8 +159,8 @@ export default function Alerts() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Severity</label>
-              <select
+              <label htmlFor="alerts-severity" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Severity</label>
+              <select id="alerts-severity" name="alerts-severity"
                 className="select-field"
                 value={form.severity}
                 onChange={(e) => setForm({ ...form, severity: e.target.value })}
@@ -160,8 +171,8 @@ export default function Alerts() {
               </select>
             </div>
             <div className="md:col-span-2">
-              <label className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Message</label>
-              <textarea
+              <label htmlFor="alerts-message" className="block text-xs text-on-surface-variant mb-1 data-font uppercase">Message</label>
+              <textarea id="alerts-message" name="alerts-message"
                 className="input-field data-font"
                 placeholder="Alert description..."
                 rows={3}
@@ -252,13 +263,21 @@ export default function Alerts() {
                 <tr>
                   <td colSpan={5} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">notifications_off</span>
-                    <p>No active alerts. System monitoring is running.</p>
+                    <p>{loading ? 'Loading alerts…' : error ? 'Alerts unavailable.' : 'No alerts on this page.'}</p>
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        <Pagination
+          label="Alert pages"
+          page={page}
+          hasMore={hasMore}
+          loading={loading}
+          onPrev={() => setPage((p) => p - 1)}
+          onNext={() => setPage((p) => p + 1)}
+        />
       </div>
     </div>
   );

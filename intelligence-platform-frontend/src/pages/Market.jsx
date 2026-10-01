@@ -1,15 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getMarketOverview, getTopMovers } from '../services/api';
 import MetricTile from '../components/MetricTile';
 import StatusChip from '../components/StatusChip';
 
 export default function Market() {
+  const requestVersion = useRef(0);
   const [market, setMarket] = useState(null);
   const [topMovers, setTopMovers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
+    const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
     try {
@@ -17,16 +19,21 @@ export default function Market() {
         getMarketOverview(),
         getTopMovers(),
       ]);
+      if (version !== requestVersion.current) return;
       setMarket(overviewData);
       setTopMovers(moversData?.top_movers || []);
     } catch (e) {
-      setError(e.message || 'Failed to load market data');
+      if (version === requestVersion.current) setError(e.message || 'Failed to load market data');
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  const invalidateRequests = useCallback(() => { requestVersion.current++; }, []);
+  useEffect(() => {
+    loadData();
+    return invalidateRequests;
+  }, [loadData, invalidateRequests]);
 
   const macro = market?.macro_environment || {};
   const mkt = market?.market || {};
@@ -37,11 +44,11 @@ export default function Market() {
         <div>
           <h1 className="text-4xl font-bold text-on-surface">Market Overview</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Macro market snapshot, indices, and economic indicators.
+            Macro market snapshot, top movers, and economic indicators.
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn-secondary flex items-center gap-2" onClick={loadData}>
+          <button className="btn-secondary flex items-center gap-2" onClick={loadData} disabled={loading}>
             <span className="material-symbols-outlined text-sm">refresh</span> Refresh
           </button>
         </div>
@@ -50,7 +57,7 @@ export default function Market() {
       {error && (
         <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
           <p>Could not load market data: {error}</p>
-          <button className="btn-secondary btn-sm" onClick={loadData}>Retry</button>
+          <button className="btn-secondary btn-sm" onClick={loadData} disabled={loading}>Retry</button>
         </div>
       )}
 
@@ -81,7 +88,7 @@ export default function Market() {
           label="Risk Level"
           value={mkt.risk_level || '—'}
           icon="shield"
-          color={mkt.risk_level === 'high' ? 'error' : 'tertiary'}
+          color={mkt.risk_level === 'high' ? 'error' : mkt.risk_level === 'low' ? 'tertiary' : 'secondary'}
         />
         <MetricTile
           label="Economic Regime"

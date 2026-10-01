@@ -1,35 +1,34 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { getCompanies } from '../services/api';
+import Pagination from '../components/Pagination';
 
 export default function Companies() {
-  const navigate = useNavigate();
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [companies, setCompanies] = useState([]);
   const [search, setSearch] = useState('');
   const [error, setError] = useState(null);
 
-  async function load() {
-    try {
-      const data = await getCompanies({ limit: 100 });
-      setCompanies(data?.companies || []);
-      setError(null);
-    } catch (e) {
-      setError(e.message || 'Failed to load companies');
-    }
-  }
-
-  useEffect(() => { load(); }, []);
-
-  const filtered = companies.filter((c) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      (c.ticker || '').toLowerCase().includes(q) ||
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.sector || '').toLowerCase().includes(q) ||
-      (c.industry || '').toLowerCase().includes(q)
-    );
-  });
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const data = await getCompanies({ limit: 51, offset: page * 50, q: search.trim() });
+        if (!active) return;
+        setCompanies((data?.companies || []).slice(0, 50));
+        setHasMore((data?.companies || []).length > 50);
+        setError(null);
+      } catch (error) {
+        if (active) { setCompanies([]); setHasMore(false); setError(error.message); }
+      } finally { if (active) setLoading(false); }
+    }, 250);
+    return () => { active = false; clearTimeout(timer); };
+  }, [page, search, retry]);
+  const filtered = loading ? [] : companies;
 
   return (
     <div>
@@ -47,9 +46,11 @@ export default function Companies() {
             </span>
             <input
               className="input-field pl-9 w-56 data-font"
-              placeholder="Search companies..."
+              placeholder="Company name or ticker..."
+              aria-label="Company name or ticker"
+              maxLength={100}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             />
           </div>
         </div>
@@ -58,7 +59,7 @@ export default function Companies() {
       {error && (
         <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
           <p>Could not load companies: {error}</p>
-          <button className="btn-secondary btn-sm" onClick={load}>Retry</button>
+          <button className="btn-secondary btn-sm" onClick={() => setRetry(value => value + 1)}>Retry</button>
         </div>
       )}
 
@@ -80,12 +81,11 @@ export default function Companies() {
                 filtered.map((c, i) => (
                   <tr
                     key={c.id}
-                    onClick={() => navigate(`/companies/${c.ticker}`)}
                     className={`${
                       i % 2 === 0 ? 'bg-surface' : 'bg-surface-dim'
                     } border-b border-outline-variant hover:bg-surface-variant transition-colors group cursor-pointer`}
                   >
-                    <td className="py-2 px-4 font-bold">{c.ticker}</td>
+                    <td className="py-2 px-4 font-bold"><Link className="underline" to={`/companies/${encodeURIComponent(c.ticker)}`}>{c.ticker}</Link></td>
                     <td className="py-2 px-4">{c.name}</td>
                     <td className="py-2 px-4 text-on-surface-variant">{c.exchange}</td>
                     <td className="py-2 px-4">{c.sector}</td>
@@ -99,13 +99,21 @@ export default function Companies() {
                 <tr>
                   <td colSpan={6} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">business</span>
-                    <p>No companies tracked yet. Start by ingesting market data.</p>
+                    <p>{loading ? 'Loading companies…' : 'No companies found on this page.'}</p>
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        <Pagination
+          label="Company pages"
+          page={page}
+          hasMore={hasMore}
+          loading={loading}
+          onPrev={() => setPage((p) => p - 1)}
+          onNext={() => setPage((p) => p + 1)}
+        />
       </div>
     </div>
   );

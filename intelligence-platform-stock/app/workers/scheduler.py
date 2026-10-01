@@ -15,6 +15,9 @@ To add a new domain's background jobs:
 from __future__ import annotations
 
 import asyncio
+import signal
+
+from sqlalchemy import text
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -79,11 +82,7 @@ def create_scheduler() -> AsyncIOScheduler:
                     name=f"[{domain.name}] {task.name}",
                     max_instances=1,
                     coalesce=True,
-                    next_run_time=(
-                        datetime.now(timezone.utc)
-                        if run_immediately
-                        else None
-                    ),
+                    **({"next_run_time": datetime.now(timezone.utc)} if run_immediately else {}),
                 )
 
                 total_jobs += 1
@@ -108,7 +107,7 @@ def create_scheduler() -> AsyncIOScheduler:
         logger.info(
             "Scheduled job: %s | next_run=%s",
             job.id,
-            job.next_run_time,
+            getattr(job, "next_run_time", "first interval after startup"),
         )
 
     logger.info(
@@ -122,16 +121,63 @@ def create_scheduler() -> AsyncIOScheduler:
     return scheduler
 
 
-async def run_scheduler() -> None:
-    """Run the scheduler (blocking)."""
+# Stable session-level lock, shared by scheduler replicas for this database.
+SCHEDULER_LOCK_ID = 734201930
+
+
+async def serve_leader(conn, stop: asyncio.Event) -> None:
+    """Run only while this dedicated connection retains database ownership."""
     scheduler = create_scheduler()
     scheduler.start()
-
-    logger.info("Scheduler started")
-
+    logger.info("Scheduler leadership acquired")
     try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+        while not stop.is_set():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                # A lost DB session loses its advisory lock. Exit rather than
+                # silently reconnecting and continuing as a second scheduler.
+                await conn.execute(text("SELECT 1"))
+                await conn.commit()
+    finally:
+        scheduler.shutdown(wait=False)
+        # AsyncIOScheduler schedules executor cancellation on the event loop.
+        await asyncio.sleep(0)
         logger.info("Scheduler stopped")
+
+
+async def run_scheduler() -> None:
+    from app.core.database import engine
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    try:
+        async with engine.connect() as conn:
+            while not stop.is_set():
+                acquired = (await conn.execute(
+                    text("SELECT pg_try_advisory_lock(:key)"), {"key": SCHEDULER_LOCK_ID}
+                )).scalar()
+                await conn.commit()
+                if acquired:
+                    try:
+                        await serve_leader(conn, stop)
+                    finally:
+                        # Closing a failed connection also releases ownership.
+                        if not conn.invalidated:
+                            await conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": SCHEDULER_LOCK_ID})
+                            await conn.commit()
+                    return
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+    finally:
+        await engine.dispose()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_scheduler())

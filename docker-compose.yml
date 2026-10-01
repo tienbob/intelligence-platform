@@ -93,14 +93,39 @@ services:
     command: python -m app.workers.jobs
     restart: unless-stopped
 
+  scheduler:
+    build: ./intelligence-platform-stock
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/intelligence_stock
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      INTELLIGENCE_DOMAINS: ${INTELLIGENCE_DOMAINS:-stock}
+      INTERNAL_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
+    depends_on:
+      python-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    command: python -m app.workers.scheduler
+    restart: unless-stopped
+
   # ── Rails API Gateway ─────────────────────────────────────────
   rails-migrate:
-    build: ./intelligence-platform-api
+    build:
+      context: ./intelligence-platform-api
+      args:
+        BUNDLE_WITHOUT: ${RAILS_BUNDLE_WITHOUT:-test}
     container_name: intelligence_stock_rails_migrate
     environment:
+      RAILS_ENV: ${ENVIRONMENT:-development}
       DATABASE_URL: postgres://postgres:postgres@db:5432/intelligence_stock
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-change-me-in-production-change-me-in-production-1234}
       RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-change-me-in-production-1234}
+      PYTHON_INTERNAL_URL: http://python:8001
+      PYTHON_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
     depends_on:
       db:
         condition: service_healthy
@@ -109,9 +134,13 @@ services:
     command: bash bin/migrate.sh
 
   rails:
-    build: ./intelligence-platform-api
+    build:
+      context: ./intelligence-platform-api
+      args:
+        BUNDLE_WITHOUT: ${RAILS_BUNDLE_WITHOUT:-test}
     container_name: intelligence_stock_rails
     environment:
+      RAILS_ENV: ${ENVIRONMENT:-development}
       DATABASE_URL: postgres://postgres:postgres@db:5432/intelligence_stock
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-change-me-in-production-change-me-in-production-1234}
       RAILS_MASTER_KEY: ${RAILS_MASTER_KEY:-}

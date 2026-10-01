@@ -78,12 +78,7 @@ async def lifespan(app: FastAPI):
         [d.name for d in registry.enabled],
     )
 
-    # Start domain-specific schedulers
-    from app.workers.scheduler import create_scheduler
-
-    scheduler = create_scheduler()
-    scheduler.start()
-    logger.info("Background scheduler started with %d jobs", len(scheduler.get_jobs()))
+    # Periodic work runs in the dedicated scheduler service, never API workers.
 
     from app.core.security import _idempotency_redis
 
@@ -95,8 +90,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    scheduler.shutdown()
-    logger.info("Background scheduler stopped")
 
 
 app = FastAPI(
@@ -152,6 +145,10 @@ async def _idempotency_replay_handler(_request: Request, exc: IdempotencyReplay)
 logger = get_logger(__name__)
 registry = get_registry()
 for domain in registry.enabled:
+    # Production users authenticate through Rails, which enforces revocation.
+    # Direct bearer-token routes would bypass that session check.
+    if settings.ENVIRONMENT == "production":
+        continue
     try:
         router = domain.get_api_router()
         app.include_router(router, prefix=f"/api/v1")

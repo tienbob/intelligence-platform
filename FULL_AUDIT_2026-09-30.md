@@ -648,3 +648,131 @@ Re-read the findings and remediation history before continuing. These changes do
 - **F03/F14:** Unread-badge responses are invalidated on account changes/unmount, and older refresh responses cannot overwrite newer badge results.
 
 **Verification:** Full Python suite **232 passed**, including three compiled-query regressions; after strengthening the snapshot-payload assertions those three tests passed again. Frontend **3 polling tests passed**, ESLint and production build passed; diff whitespace checks clean. Browser interactions, database query plans, live migration/session/rate-limit checks and scheduler/worker recovery remain open. This is another partial remediation batch, not full audit closure.
+
+### Remediation batch 9 — scheduler process ownership
+
+- **O01 (scheduler implementation):** Removed scheduler startup from the API lifespan. Added a dedicated `scheduler` Compose service and `python -m app.workers.scheduler` entry point. Scheduler replicas acquire a stable PostgreSQL session advisory lock before starting jobs; standby replicas retry without starting a scheduler. A dedicated connection checks database connectivity every five seconds, and an error stops scheduling rather than reconnecting silently as another leader. SIGTERM/SIGINT trigger shutdown.
+- **Functional scheduler correction:** `run_immediately=False` no longer passes `next_run_time=None` to APScheduler (which paused these jobs indefinitely). These tasks now receive their first run from the interval trigger. Pending-job logging tolerates unset next-run timestamps.
+
+**Run/deployment requirement:** Start the scheduler service alongside the API and queue worker. For a non-Compose deployment, launch `python -m app.workers.scheduler` separately; starting only Uvicorn no longer runs periodic ingestion/analysis tasks.
+
+**Verification:** Python suite **235 passed**; three new scheduler tests cover delayed first runs, shutdown and simulated connection loss. Compose YAML parsed successfully with the expected scheduler command; diff whitespace check clean. PostgreSQL advisory-lock contention and failover have not been exercised against a live database. There is up to a five-second failure-detection interval, and already-started external calls cannot be rolled back; this change does not promise exactly-once provider effects. Worker crash recovery and in-flight task cancellation remain integration requirements. Changes in this batch are not yet committed or pushed.
+
+### Remediation batch 10 — market overview waste and index-cache freshness
+
+- **O08:** Removed the market overview's unused index-provider calls and anomaly query. Concurrent index-cache misses now share one refresh per API process. Four symbol requests run concurrently with individual ten-second timeouts rather than accumulating four sequential timeouts. Provider resources close on completion/failure.
+- **F08 remainder:** Index refresh bypasses the provider's generic 24-hour response cache while retaining the endpoint's five-minute cache. Zero/invalid index prices no longer count as successful data. Last-good outage responses retain the original fetch timestamp and report `stale=true`; successful responses include `fetched_at` and `partial` metadata. Frontend freshness disclosure remains follow-up work; metadata alone does not make that visible to users.
+
+**Verification:** Python **238 passed**, including concurrent-request coalescing, stale outage fallback/negative-cache behavior, and invalid-price rejection. Whitespace checks clean. No live provider calls were made. Coalescing is per process, not a distributed lock; multiple API replicas may each refresh their own cache. These changes and batch 9 remain uncommitted.
+
+### Remediation batch 11 — visible freshness and loading states
+
+- **F08/U07:** Dashboard now retains the index API's freshness metadata and displays stale/partial warnings plus retrieval time (explicitly not quote execution time). Initial index, mover and alert requests show loading messages rather than immediately claiming missing data/no alerts. Removed the unsupported monitoring-active claim and real-time headline wording.
+- **O09/U01 (Market page):** Request generations prevent old refresh responses or unmounted requests from applying state. Refresh controls disable while loading. Unknown/medium risk no longer uses the low-risk green color. Page copy now names the content actually rendered (top movers rather than indices).
+- **F15 (copy):** Removed the footer's unsupported “SEC Registered” claim. No regulatory status was independently verified or inferred.
+
+**Verification:** Frontend polling tests **3 passed**; ESLint and production build passed after the final edits; whitespace checks clean. This batch changes frontend presentation only; the last backend result remains **238 passed**. Browser-level visual/accessibility checks remain open. Batches 9–11 are uncommitted and have not been pushed.
+
+### Remediation batch 12 — batched optimizer risk loading (2026-10-01)
+
+- **O10 (optimizer portion):** Added `RiskEngine.get_latest_risks()` to retrieve one latest risk row per requested company in a single PostgreSQL DISTINCT ON query. Optimizer opportunities now use two queries rather than one plus a query per company. Empty risk batches skip database access. Latest score and risk selections break timestamp ties by primary key; latest scores are deduplicated before the opportunity limit. Snapshot/history batching remains open.
+- Preserved legitimate zero investment/risk/volatility values instead of replacing them with defaults. Existing fallbacks for genuinely missing values are unchanged.
+- Moved the optimizer's numerical-library import into its execution endpoint so data-loading code can be imported and tested independently. The local SciPy native-extension failure is still present; this does not repair or validate optimizer execution.
+
+**Verification:** Python **241 passed**, with new tests checking two queries for both one and twenty candidates, zero-value preservation, compiled risk selection and empty batches. Frontend ESLint/build rerun successfully to confirm batch 11's final cleanup. Whitespace checks clean. Live PostgreSQL query plans and numerical optimizer execution remain unverified. Batches 9–12 remain uncommitted/unpushed.
+
+### Remediation batch 13 — batched snapshot and backtest history queries (2026-10-01)
+
+- **O10 (query batching):** Backtest daily-price loading and snapshot creation share a daily-history loader using batches of up to 500 company IDs, explicit date bounds, chronological ordering and selected payload columns. Snapshot latest-score capture also batches IDs and resolves timestamp ties by primary key. Query counts now scale by batch rather than by individual company.
+- Corrected snapshot creation documentation to describe prices/latest scores actually stored. History retention, duplicated snapshot arrays and full score-history pinning remain open; batching does not reduce the retained historical dataset size.
+
+**Verification:** Python **245 passed**, including four new regressions covering empty/20/501-company batch query counts, date/interval SQL predicates, snapshot payload compatibility and latest-score selection. Whitespace checks clean. Tests use session doubles and PostgreSQL SQL compilation; live query plans and large-history memory benchmarks remain unverified. Batches 9–13 remain uncommitted/unpushed.
+
+### Remediation batch 14 — pagination, production routing and UI semantics (2026-10-01)
+
+- **F11:** Companies, alerts, backtest runs and snapshots now have page controls. Companies query server-side name/ticker search with a 250 ms debounce and ignore obsolete responses. Trade API supports a nonnegative offset, deterministic date/id ordering and one-row lookahead; detail/trade responses expose `has_more`. Backtest detail explicitly offers more trades rather than silently stopping at 100. Search-page result pagination remains open. Offset pages can shift under concurrent inserts/deletes; this is not cursor/snapshot pagination.
+- **Q03 regression:** Blank backtest ticker input now sends null (all tracked companies), matching the request contract instead of sending a rejected empty list.
+- **S04:** In production, Python no longer mounts public domain bearer-token routes. Only service-key-authenticated internal stock routes remain, preventing public Python authentication from bypassing gateway session revocation. Development retains public domain routes. Added nginx CSP restricting scripts/API connections to same-origin, allowing the existing Google font sources and inline chart styles, and blocking object embedding/framing. Browser token storage hardening remains open.
+- **U04/U05/U07/U10:** Company tickers are real links; alert/backtest form labels associate with controls; loading/empty alert copy no longer asserts active monitoring. Added native dark color-scheme and browser theme metadata. Alert/backtest requests invalidate stale responses on changes/unmount.
+
+**Verification:** Python **249 passed**, including offset/order and trade lookahead boundary regressions. Frontend polling tests **3 passed**, final ESLint/build passed, whitespace checks clean. A production app import with test-only credentials verified absence of public stock routes and presence of internal analysis routes. Docker daemon remains unavailable; migrations, live concurrency/recovery, nginx runtime/CSP browser compatibility and browser pagination journeys remain unverified. No live services were changed. All changes since batch 9 remain uncommitted/unpushed.
+
+**Still open after this batch:** search-result pagination; remaining page-specific accessibility/loading/filter behavior and URL-selected backtest state; refresh-token browser storage hardening; snapshot retention/full history design; worker crash/lease-loss edge cases; CI/tooling and remaining schema/failure-path coverage; numerical optimizer verification (local SciPy native extension failure); password-reset delivery/product placeholders; live integration/browser/performance acceptance checks. Earlier “still-open” lists are historical and must be read together with subsequent batches. The audit is not closed.
+
+### Live Docker verification — 2026-10-01
+
+Docker is now running: PostgreSQL/Redis/Python healthy; Rails/frontend/worker/scheduler running. Existing application database reports Alembic `0020` and Rails auth migrations through `20260930000200`. nginx configuration validation passes. All writes below targeted databases named `audit_verify_20261001_0915` and `audit_verify_20261001_fixed`; no existing application records were altered.
+
+**New defects found and corrected:**
+
+1. **Q02 clean-install failure:** Running Rails `db:migrate` on the unregistered, Python-migrated database loaded the old Rails schema snapshot, erased Alembic's version row and removed newer columns. Replaced `bin/migrate.sh`'s `db:prepare` path with direct Rails migration-context execution. A second clean database migrated through both chains while preserving Alembic `0020` and `alerts.legacy_private`. This closes the reproduced clean-install path; arbitrary historic/deleted-revision databases still require individual reconciliation.
+2. **F02 receipt endpoint mismatch:** `_can_manage` still rejected shared alerts even though dismissal writes only the caller's receipt. Authenticated viewers can now dismiss visible shared alerts independently; legacy-private rows remain quarantined. Updated stale unit expectations. Corrected module loaded only into the isolated test process for validation.
+3. **S03 Rails pool leak:** The real concurrent throttle test exhausted connections because `ActiveRecord::Base.connection` permanently leased them. Switched to `connection_pool.with_connection`; the concurrency test then passed.
+
+**Live evidence / acceptance checks passed:**
+
+- Eight concurrent PostgreSQL reservations of the same actor/key/payload return one job ID; changed payload returns 409.
+- User B cannot list/dismiss user A's private alert; dismissing a shared alert for A does not dismiss it for B.
+- Two Redis limiter instances, twelve concurrent requests, limit three: exactly three accepted using the real Lua script.
+- Concurrent refresh using a real Rails AuthSession row permits exactly one rotation; old refresh replay fails; revoked access session is rejected.
+- Twelve concurrent PostgreSQL auth-throttle requests permit exactly three at limit three after the connection-pool fix.
+- A purpose-created worker subprocess was killed after claiming a synthetic job. Recovery explicitly failed both the job and its backtest row without executing an external provider call.
+- PostgreSQL scheduler advisory lock excludes a second connection and can transfer after release. This tests the lock primitive, not every scheduler/process network-partition case.
+- SciPy imports and a numerical optimization succeed in Docker; the local macOS wheel limitation does not apply to this container.
+
+Repeatable guarded probes are saved under `intelligence-platform-stock/tests/integration/audit_live.py`, `audit_worker.py` and `intelligence-platform-api/test/integration/audit_auth.rb`. They refuse databases whose names do not start with `audit_verify_`. Test databases are retained for inspection.
+
+**Closure limits:** The reproduced behaviors above are verified, not merely source-reviewed. Fixes discovered in this session have not been rebuilt into the running application services. Full audit closure is still not justified: browser journeys/CSP behavior, representative load/query plans, legacy migration histories, and worker lock-connection loss while the process remains alive have not been verified. The separate browser-token-storage and product/UI follow-ups remain open. Do not interpret this live-check entry as a claim that every High/Critical finding is closed or deployed.
+
+### High-severity closure ledger — validation pass, 2026-10-01
+
+Every High-severity finding and every §9 P0 release gate was re-validated against the working tree and, where a check was possible, against the running Docker stack. Evidence tags: **[code]** source inspection; **[unit]** `pytest` (256 passed) / committed Ruby suite / frontend `node --test`; **[live]** guarded probe against a scratch `audit_verify_*` database; **[repro]** the audit's own counterexample re-run. Statements below are limited to what was checked this pass; unverified behaviour is listed under "Explicitly open".
+
+| ID | Sev/Prio | Status | Validation evidence |
+|---|---|---|---|
+| **F01** | High/P1 | ✅ Closed | [code][unit] `companies.py` / `financials.py` resolve through `app.domains.stock.services.company_resolution`; no `api.v1` import remains; `test_unknown_ticker_resolution_imports_exist` asserts the target module exists on disk. |
+| **F02** | High/P0 | ✅ Closed | [code][live] `alerts.user_id` scope + `legacy_private` quarantine + per-viewer `alert_reads` receipts. Live: user B cannot list or dismiss A's private alert (404), and dismissing a shared alert for A leaves it unread for B. |
+| **F04** | High/P1 | ✅ Closed | [code][live] Key namespaced by actor + method + path + body fingerprint; Redis tier with local fallback; `IdempotencyReplay` returns the original status *and* payload; durable `work_jobs` reservation is atomic with a fingerprint → 409 on body change. Live: 8 concurrent reservations → 1 job id; changed body → 409; replay after process restart returns the original 202; cross-user replay → 404. |
+| **F06** | High/P1 | ✅ Closed | [code][unit] Sector filtering moved into SQL **before** `LIMIT`; latest score per company selected by `max(timestamp)` then `max(id)` so ties cannot consume page slots; `risk_profile` removed rather than silently ignored. |
+| **F07** | High/P0 | ✅ Closed | [code][unit] `score`/`recommendation`/`components`/`scoring_*` all come from the single screening row that is filtered and ordered; the deep analysis is reported separately as `analysis_score`; genuine `0` risk is preserved and missing risk stays `null`. |
+| **F08** | High/P0 | ✅ Closed | [code][unit][live] Index TTL 43200s → 300s; failures use a 30s negative window and serve last-known-good with `stale=true` and the original `fetched_at`; per-symbol 10s timeouts; provider 24h cache bypassed for this endpoint. Live: stale/partial/fetched_at observed. |
+| **F12** | High/P1 | ✅ Closed (audit's disclosure option) | [code][unit] `snapshot_coverage` JSONB + `compute_snapshot_coverage` classify decision inputs (prices fail fast if unpinned, benchmark source recorded, score history flagged `live` for score-driven strategies); FE shows a three-state banner; the last pending item — >100-trade truncation — is closed by `offset` + one-row lookahead + `has_more` + an explicit "more trades" control. |
+| **F13** | High/P1 | ✅ Closed | [repro] The audit's counterexample (buy 100@100 and 1@1, sell 101@60, return −39.4%) now reports `win_rate = 0.0` instead of `1.0`; breakeven is not a win; no closed sell returns `null`. Accounting is share-weighted average cost, and the UI labels it "Win Rate*" with a visible denominator/method note. |
+| **F14** | High/P1 | ✅ Closed | [code][live] Startup revalidates `/auth/me` (refreshing once); refresh completion is guarded by a session generation + stored-token comparison so a late refresh cannot write after logout or an account switch; `/auth/logout` revokes the gateway session. Live: concurrent refresh rotates exactly once, a replayed refresh is rejected, a revoked access token is rejected. |
+
+| **O01** | High/P0 | ✅ Closed | [code][live] Request handlers never execute work — analysis, backtest and ingestion are reserved rows; a standalone worker owns execution under a per-job advisory lock; abandoned `running` rows are failed explicitly instead of replayed; the scheduler is its own service holding a session advisory lock. Live: a killed worker failed job *and* target row with no provider call; the scheduler lock excluded a second connection and transferred after release; the live DB holds completed analysis and backtest jobs. |
+| **O02** | High/P1 | ✅ Closed (ingestion half completed this pass) | [code][unit][live] Backtests were already durable. First-time ingestion now uses the same outbox: `app/domains/stock/services/company_resolution.py` reserves one job per ticker (`ON CONFLICT` on `uq_work_jobs_scope_key`), and all five request paths — stock quote, price history, company detail, the shared financials helper (statements/metrics/technicals) and analysis create — answer `404` + `Retry-After: 30` ("not tracked yet; ingestion has started") while the worker runs the pipeline. Live: 12 concurrent first-time reads → **1** durable row, no provider work in-request, a retry reuses the reservation, and the worker drove the job `queued → completed`. Residual by design: the first client is told to retry, whereas the old code blocked up to the 30s gateway timeout and could surface a 502. |
+| **O03** | High/P1 | ✅ Closed | [code][live] `redis.asyncio` client, configuration-only availability check (no sync ping), `scan_iter` + `unlink` instead of `KEYS`, 2s socket timeouts. Live: a 2s-delayed Redis did not stall unrelated traffic and cache reads still served. |
+| **S01** | High/P0 | ✅ Closed | [code][live] Python and Rails refuse to boot on unset/known-default secrets unless `ENVIRONMENT=development`; a missing/blank role no longer implies `SYSTEM`; production Python mounts only service-key-authenticated internal routes. Live: known-default boot refused, `/internal/*` 401 without the service key, `/auth/logout` 401 unauthenticated. |
+| **S02** | High/P0 | ✅ Closed | [code][live] `/metrics` is no longer proxied by nginx and both tiers require the internal key outside development; labels are route-templated so no resource ids reach telemetry. Live: unauthenticated `/metrics` → 401. |
+| **S03** | High/P1 | ✅ Closed | [code][live] Python uses an atomic Redis Lua sliding window on server time and returns 503 + `Retry-After` when Redis is unavailable for paid work, trusting forwarded identity only with the service key; Rails enforces shared PostgreSQL counters for register/login/refresh. Live: two limiter instances × 12 concurrent at limit 3 → exactly 3 accepted; the fixed `AuthThrottle` (`connection_pool.with_connection`) allowed exactly 3 of 12 threads at pool 5 with no exhaustion inside the running container. |
+
+**§9 P0 gates whose severity is Medium:**
+
+| ID | Gate | Status | Validation evidence |
+|---|---|---|---|
+| **F03** | private alerts / shared receipts | ✅ Closed | [code][live] `is_read` exposed with an explicit Unread/All view and badge invalidation on mutation; shared receipts are independent per viewer (live). |
+| **O07** | no public resource-level telemetry | ✅ Closed | [code][unit] `[sum, count]` accumulators instead of retained sample lists; route-templated labels; unmatched paths collapse to `"unmatched"`. |
+| **Q02** | migration certification | ✅ Closed for the clean-install path | [code][live] `bin/migrate.sh` executes the Rails migration context directly (never `db:prepare`); a clean run preserved Alembic `0020` and `alerts.legacy_private`. Historic/deleted-revision databases still need individual reconciliation (documented). |
+| **S04** | refresh lifecycle / hardening | 🟡 Mostly closed | [code][live] Rotation, replay rejection, revocation and CSP are live-verified. Browser token storage stays open (below). |
+
+### Incident fix — nginx stale upstream plus HTML-as-JSON parsing (2026-10-01)
+
+While validating, every `/api/*` call began returning `502 Bad Gateway` as HTML, and the frontend surfaced the raw error `Unexpected token '<', "<html> <h"... is not valid JSON`.
+
+- **Root cause (operations):** the frontend container had been up for hours while the `rails` container was recreated with a new IP. nginx resolves `rails` once at startup and kept proxying to the dead address (`172.23.0.7`; Rails was at `172.23.0.6`). Nothing in the application code was broken — verified by the container IPs against the nginx `connect() failed` log lines.
+- **Fix:** nginx now resolves through Docker's embedded DNS via a variable (`resolver 127.0.0.11`; `proxy_pass $rails_upstream` for `/api/` and `/health/`), so a recreated upstream no longer strands every API call. Rebuilt and verified `200`-path JSON again (unauthenticated probes return the correct gateway `401 {"detail":"Not authenticated"}`).
+- **Frontend hardening:** a 502/HTML body used to reach a JSON parser. New shared `src/services/http.js` `readJson()` checks the content type first and throws an actionable message ("non-JSON response — misrouted or unavailable", with the status attached) instead of syntax-error text. Wired into `api.js`, `refresh.js` and all three `auth.jsx` parse sites; the login path previously parsed *before* checking `res.ok` and has been reordered. The unused `getHealthLive`/`getHealthReady`/`getMetrics` helpers were the audit's Q07 leftover — they prefix `/api/v1` while health lives at root and `/metrics` is intentionally unproxied (S02), so they could only produce HTML 404s; removed rather than repaired.
+- **Verification:** `npm test` 7 passed (3 existing + 4 new non-JSON regressions), ESLint clean, `vite build` green, frontend rebuilt and live API paths confirmed JSON.
+
+### Explicitly open after this pass
+
+- **Q01 (High) — CI and browser-level coverage.** Python 256 tests, the committed Ruby suite (`test/services/jwt_service_test.rb`, 4 runs / 9 assertions) and `npm test` polling tests all run, and the guarded live probes cover reservation/replay, alert isolation, Redis quota, auth rotation/revocation/throttle, worker recovery, scheduler lock transfer and ingestion coalescing. Still absent: a CI workflow (no `.github/workflows`) and any browser-level suite.
+- **F12 residual (design, not a defect).** Snapshots still record only the latest score per ticker, so full score-history pinning remains a follow-up; the covered behaviour is the disclosure the finding permitted.
+- **U01 / U02 and remaining UI items.** Closed in source with unit coverage, but no browser/visual verification was possible: this environment has no Chrome for the browser tool, and the audit already records that no callable browser was available. Keyboard, contrast, zoom and real-device checks remain unverified.
+- **S04 / F15 product items.** Browser token-storage hardening and password-reset delivery are unchanged.
+- **F02 legacy rows.** Ownerless pre-migration alerts are quarantined as `legacy_private` and visible only to admins; they were not migrated into another user's data.
+
+**Deployment caveat verified this pass.** The reviewed fixes are in the working tree, not in the running services. Concretely: the Rails container still holds the pre-fix `AuthThrottle`, and the 12-thread probe run *through that image* exhausted the connection pool, while loading the fixed file into the same container passed. The running Python services likewise predate the ingestion change. Rebuild and redeploy `api`, `python`, `worker` and `scheduler` before treating either as live.
+
+**Probe reuse.** `tests/integration/audit_ingest.py` joins the existing guarded probes (`audit_live.py`, `audit_worker.py`, `intelligence-platform-api/test/integration/audit_auth.rb`); all refuse databases whose name does not start with `audit_verify_` and were re-run for this ledger.

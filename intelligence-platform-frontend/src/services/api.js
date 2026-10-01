@@ -1,5 +1,6 @@
 import { getStoredToken, clearTokens } from './token';
 import { refreshAccessToken } from './refresh';
+import { readJson } from './http';
 
 const BASE_URL = '/api/v1';
 
@@ -40,17 +41,20 @@ async function request(url, options = {}, retried = false) {
     }
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    // Prefer the error envelope; fall back to plain text/HTML bodies without
+    // pretending an HTML error page is JSON.
+    const err = await readJson(res).catch(() => null);
     // Architecture §71: error responses use {"error": {"code": ..., "message": ...}}
     // Fall back to flat {"detail": "..."} for backward compatibility
-    const message = err?.error?.message || err?.detail || `HTTP ${res.status}`;
+    const message = err?.error?.message || err?.detail
+      || `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
     throw new Error(message);
   }
   // 204 No Content — no body to parse (e.g. DELETE responses)
   if (res.status === 204) {
     return null;
   }
-  const json = await res.json();
+  const json = await readJson(res);
   // Architecture §71: unwrap response envelope {"data": {...}, "meta": {...}}
   // If the response has a "data" key at the top level, return its value.
   // Otherwise return the raw response (for health/metrics endpoints that skip the envelope).
@@ -60,10 +64,11 @@ async function request(url, options = {}, retried = false) {
   return json;
 }
 
-// Health
-export const getHealthLive = () => request('/health/live');
-export const getHealthReady = () => request('/health/ready');
-export const getMetrics = () => request('/metrics');
+// NOTE (audit Q07): the unused `getHealthLive` / `getHealthReady` / `getMetrics`
+// helpers were removed. They prefixed `/api/v1` while Rails serves health at
+// the root (`/health/live`, `/health/ready`), and `/metrics` is key-gated and
+// deliberately not proxied (audit S02) — so they could only ever have returned
+// an HTML 404 page to the client.
 
 // Stocks
 export const getStockQuote = (ticker) => request(`/stocks/${ticker}`);

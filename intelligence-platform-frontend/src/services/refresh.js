@@ -1,4 +1,5 @@
 import { getStoredRefreshToken, getSessionGeneration, storeTokens } from './token.js';
+import { readJson } from './http.js';
 
 let inFlight = null;
 export async function refreshAccessToken() {
@@ -14,7 +15,7 @@ export async function refreshAccessToken() {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) return null;
-      const json = await res.json();
+      const json = await readJson(res);
       const data = json?.data || json;
       // Storage comparison also covers logout/account changes in another tab.
       if (!data?.access_token || generation !== getSessionGeneration() || getStoredRefreshToken() !== refreshToken) return null;

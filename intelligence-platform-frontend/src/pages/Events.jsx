@@ -2,34 +2,54 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getEvents } from '../services/api';
 import StatusChip from '../components/StatusChip';
+import Pagination from '../components/Pagination';
+
+// 20 records per page. The events API is lookahead-based (no totals), so the
+// page fetches one extra row to decide whether a "Next" page exists.
+const PAGE_SIZE = 20;
 
 export default function Events() {
   const navigate = useNavigate();
   const [events, setEvents] = useState([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tickerFilter, setTickerFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  // Type options accumulate across visited pages: the API only returns the
+  // current page, so options discovered on page 1 must not vanish when the
+  // user pages back to page 0.
+  const [typeOptions, setTypeOptions] = useState([]);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const params = { limit: 100 };
+        const params = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
         if (tickerFilter.trim()) params.ticker = tickerFilter.trim().toUpperCase();
         if (typeFilter) params.event_type = typeFilter;
         const data = await getEvents(params);
-        setEvents(data?.events || []);
+        const rows = data?.events || [];
+        setEvents(rows.slice(0, PAGE_SIZE));
+        setHasMore(rows.length > PAGE_SIZE);
+        setTypeOptions((prev) => {
+          const next = new Set(prev);
+          rows.forEach((e) => { if (e.event_type) next.add(e.event_type); });
+          if (typeFilter) next.add(typeFilter);
+          return [...next];
+        });
       } catch (e) {
         setError(e.message || 'Failed to load events');
+        setHasMore(false);
       } finally {
         setLoading(false);
       }
     }
     load();
-  }, [tickerFilter, typeFilter, reloadKey]);
+  }, [tickerFilter, typeFilter, page, reloadKey]);
 
   function retryLoad() {
     // Re-run the current query, filters preserved. Previously this only
@@ -38,7 +58,7 @@ export default function Events() {
     setReloadKey((n) => n + 1);
   }
 
-  const eventTypes = [...new Set(events.map((e) => e.event_type).filter(Boolean))];
+  const eventTypes = typeOptions;
 
   return (
     <div>
@@ -54,9 +74,9 @@ export default function Events() {
             className="input-field uppercase data-font w-40"
             placeholder="Filter ticker..."
             value={tickerFilter}
-            onChange={(e) => setTickerFilter(e.target.value)}
+            onChange={(e) => { setTickerFilter(e.target.value); setPage(0); }}
           />
-          <select className="select-field w-40" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <select className="select-field w-40" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}>
             <option value="">All Types</option>
             {eventTypes.map((t) => (
               <option key={t} value={t}>{t}</option>
@@ -148,13 +168,25 @@ export default function Events() {
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-on-surface-variant">
                     <span className="material-symbols-outlined text-4xl mb-2 block">bolt</span>
-                    <p>No events detected yet. Events are generated from news and market data analysis.</p>
+                    <p>
+                      {page > 0
+                        ? 'No events on this page. Go back a page or clear the filters.'
+                        : 'No events detected yet. Events are generated from news and market data analysis.'}
+                    </p>
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        <Pagination
+          label="Event pages"
+          page={page}
+          hasMore={hasMore}
+          loading={loading}
+          onPrev={() => setPage((p) => p - 1)}
+          onNext={() => setPage((p) => p + 1)}
+        />
       </div>
       )}
     </div>

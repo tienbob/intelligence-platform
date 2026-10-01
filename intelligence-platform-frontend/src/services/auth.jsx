@@ -1,13 +1,14 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getStoredToken, storeTokens, clearTokens, getStoredUser, storeUser, getSessionGeneration, SESSION_EVENT } from './token';
 import { refreshAccessToken } from './refresh';
+import { readJson } from './http';
 const AuthContext = createContext(null);
 export function useAuth() { return useContext(AuthContext); }
 
 async function fetchProfile(token) {
   const res = await fetch('/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error('Could not validate your session');
-  const json = await res.json();
+  const json = await readJson(res);
   return json?.data || json;
 }
 export function AuthProvider({ children }) {
@@ -41,7 +42,7 @@ export function AuthProvider({ children }) {
         if (cancelled || getStoredToken() !== token) return;
         if (res.status === 401) { clearTokens(); return; }
         if (!res.ok) throw new Error('Session verification unavailable. Retry when the service is back.');
-        const json = await res.json();
+        const json = await readJson(res);
         if (!cancelled && getStoredToken() === token) storeUser(json?.data || json);
       } catch (e) { if (!cancelled) setError(e.message); }
       finally { if (!cancelled) setLoading(false); }
@@ -57,8 +58,10 @@ export function AuthProvider({ children }) {
       const res = await fetch(`/api/v1/auth/${endpoint}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.detail || json?.error?.message || 'Authentication failed');
+      // Read the body before inspecting the status: a 502/HTML page must not
+      // surface as "Unexpected token '<'" from JSON.parse (it used to).
+      const json = await readJson(res).catch(() => null);
+      if (!res.ok) throw new Error(json?.detail || json?.error?.message || `Authentication failed (HTTP ${res.status})`);
       if (generation !== getSessionGeneration()) throw new Error('Authentication was cancelled');
       const data = json?.data || json;
       storeTokens(data.access_token, data.refresh_token);
