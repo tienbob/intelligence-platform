@@ -776,3 +776,20 @@ While validating, every `/api/*` call began returning `502 Bad Gateway` as HTML,
 **Deployment caveat verified this pass.** The reviewed fixes are in the working tree, not in the running services. Concretely: the Rails container still holds the pre-fix `AuthThrottle`, and the 12-thread probe run *through that image* exhausted the connection pool, while loading the fixed file into the same container passed. The running Python services likewise predate the ingestion change. Rebuild and redeploy `api`, `python`, `worker` and `scheduler` before treating either as live.
 
 **Probe reuse.** `tests/integration/audit_ingest.py` joins the existing guarded probes (`audit_live.py`, `audit_worker.py`, `intelligence-platform-api/test/integration/audit_auth.rb`); all refuse databases whose name does not start with `audit_verify_` and were re-run for this ledger.
+
+### Audit closure — agreed remediation scope (2026-10-01)
+
+The project owner considers this audit remediation round closed and has
+confirmed that the UI looks good after the Run AI Analysis icon alignment fix.
+That control now centers its icon and label with flex layout and uses a link
+to open the Analysis page. The reported Python connection-refused incident
+was transient during startup; a subsequent Rails-to-Python readiness probe
+returned HTTP 200, and the owner confirmed the service came up.
+
+Final verification: Python 256 tests passed; frontend 7 tests passed, ESLint
+and production build passed; Ruby JWT suite 4 tests / 9 assertions passed;
+Compose validation and diff whitespace checks passed. This closure records
+acceptance of the agreed scope, not completion of every original finding.
+The explicitly open items above, including Q01 CI/browser coverage, remain
+follow-up work. Owner visual confirmation does not replace automated browser
+coverage or certify all keyboard, contrast, zoom and real-device behavior.

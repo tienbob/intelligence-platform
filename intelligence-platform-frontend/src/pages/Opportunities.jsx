@@ -148,10 +148,10 @@ export default function Opportunities() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <button className="btn-sm btn-secondary" onClick={loadOpportunities}>Refresh</button>
-          <button className="btn-sm btn-primary" onClick={() => navigate('/analysis')}>
-            <span className="material-symbols-outlined text-sm">bolt</span>
+          <Link className="btn-sm btn-primary inline-flex items-center justify-center gap-1.5" to="/analysis">
+            <span aria-hidden="true" className="material-symbols-outlined text-sm leading-none shrink-0">bolt</span>
             Run AI Analysis
-          </button>
+          </Link>
         </div>
       </div>
 
