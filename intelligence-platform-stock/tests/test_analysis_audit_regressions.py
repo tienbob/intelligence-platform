@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from sqlalchemy.dialects import postgresql
 from starlette.requests import Request
 
 from app.domains.stock.api import analysis as api
@@ -32,17 +33,50 @@ def test_regular_user_cannot_delete_shared_analysis():
     db.commit.assert_not_awaited()
 
 
-def test_untracked_company_uses_ingestion(monkeypatch):
-    from app.domains.stock.api import stocks
-    ingest = AsyncMock(return_value=None)
-    monkeypatch.setattr(stocks, "_auto_ingest_ticker", ingest)
-    db = AsyncMock()
-    db.execute.return_value = result(None)
+def test_untracked_company_schedules_durable_ingestion_without_provider_work(monkeypatch):
+    """Audit O02: an untracked ticker reserves work instead of ingesting inline."""
+    from app.domains.stock.services import company_resolution
+
+    async def forbidden_ingestion(ticker, db):
+        raise AssertionError("provider pipeline ran inside the request path")
+
+    monkeypatch.setattr(company_resolution, "ingest_missing_ticker", forbidden_ingestion)
+
+    calls = []
+
+    class ScriptedSession:
+        """Company lookup -> None, then the reservation INSERT -> job id."""
+
+        def __init__(self):
+            self.committed = 0
+
+        async def execute(self, statement):
+            calls.append(statement)
+            value = None if len(calls) == 1 else "job-1"
+            return SimpleNamespace(
+                scalar_one_or_none=lambda: value,
+                scalar_one=lambda: value,
+            )
+
+        async def commit(self):
+            self.committed += 1
+
+    db = ScriptedSession()
     with pytest.raises(HTTPException) as exc:
         asyncio.run(api.create_company_analysis(
             AnalysisRequest(ticker="NEW"), BackgroundTasks(), request(), db))
+
     assert exc.value.status_code == 404
-    ingest.assert_awaited_once_with("NEW", db)
+    # Distinguishable from "no such company": work is queued and the client
+    # is told when to come back (audit U01 truthful states).
+    assert exc.value.headers == {"Retry-After": "30"}
+    assert "not tracked yet" in exc.value.detail
+    assert db.committed == 1, "reservation must be durable before responding"
+
+    reservation = str(calls[1].compile(dialect=postgresql.dialect()))
+    assert "work_jobs" in reservation
+    assert "ON CONFLICT" in reservation.upper()
+
 
 
 def test_cancellation_during_llm_prevents_completion():

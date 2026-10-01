@@ -32,15 +32,11 @@ def _visible(actor):
 
 
 def _can_manage(alert: Alert, actor: dict) -> bool:
-    """Only the author of a private row may mutate it.
-
-    Shared system rows (``user_id IS NULL``) and anything grandfathered as
-    ``legacy_private`` are strictly view-only — even for admins — because
-    their old ``is_read`` writes were shared writes. Each viewer manages
-    their own receipt via their own row or the alert_reads table.
-    """
-    if alert.user_id is None or alert.legacy_private:
-        return False
+    """Visible viewers manage only their own read receipt, never global state."""
+    if alert.legacy_private:
+        return is_admin_actor(actor)
+    if alert.user_id is None:
+        return actor.get("user_id") is not None
     return owns_row(alert.user_id, actor)
 
 
@@ -127,7 +123,7 @@ async def get_alert(alert_id: int, fastapi_request: Request, db: AsyncSession = 
     result = await db.execute(select(Alert, Company.ticker, _read(actor)).join(
         Company, Company.id == Alert.company_id, isouter=True).where(Alert.id == alert_id, _visible(actor)))
     row = result.one_or_none()
-    if not row or not _can_manage(row[0], actor):
+    if not row:
         raise HTTPException(status_code=404, detail="Alert not found")
     return _response(row[0], row[1], actor, row[2])
 

@@ -201,7 +201,7 @@ async def analyze_events() -> None:
 
             try:
                 # Seven-day window ensures news ingested by
-                # _auto_ingest_ticker, which can span several days,
+                # the first-time ingestion pipeline, which can span days,
                 # remains eligible for event detection.
                 await engine.detect_events_from_news(
                     company.id,

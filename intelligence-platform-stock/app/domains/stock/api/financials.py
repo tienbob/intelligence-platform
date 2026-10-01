@@ -22,17 +22,21 @@ router = APIRouter(prefix="/financials", tags=["financials"])
 
 
 async def _get_company(db: AsyncSession, ticker: str) -> Company:
-    result = await db.execute(select(Company).where(Company.ticker == ticker.upper()))
-    company = result.scalar_one_or_none()
-    if not company:
-        # Auto-ingest the ticker so direct navigation self-populates.
-        # NOTE: the module is app.domains.stock.api.stocks — the earlier
-        # `api.v1.stocks` path never existed and raised ModuleNotFoundError on
-        # every unknown ticker (audit F01).
-        from app.domains.stock.api.stocks import _auto_ingest_ticker
-        company = await _auto_ingest_ticker(ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+    """Resolve a ticker, scheduling durable ingestion when it is untracked.
+
+    Used by statements, metrics and technical indicators, so one change here
+    keeps every financial route off the ingestion path (audit O02). The lazy
+    import also used to name the nonexistent `api.v1.stocks` module, which
+    raised ModuleNotFoundError on every unknown ticker (audit F01).
+    """
+    from app.domains.stock.services.company_resolution import (
+        get_or_schedule_missing,
+        ingestion_pending,
+    )
+
+    company = await get_or_schedule_missing(ticker, db)
+    if company is None:
+        raise ingestion_pending(ticker)
     return company
 
 

@@ -53,9 +53,9 @@ def test_alert_can_manage_gates_dismiss():
     # Owner manages their own private alert; nobody else does.
     assert _can_manage(owner, user) is True
     assert _can_manage(legacy, other) is False   # another user's alert
-    # Shared system rows are never manageable under the per-user receipt model.
-    assert _can_manage(system, user) is False
-    assert _can_manage(system, admin) is False
+    # Shared rows allow each authenticated viewer to manage their own receipt.
+    assert _can_manage(system, user) is True
+    assert _can_manage(system, admin) is True
     # An owner of a grandfathered legacy-private row still cannot mutate it:
     # its old is_read writes were shared writes, so the row is view-only.
     assert _can_manage(legacy, user) is False

@@ -27,6 +27,17 @@ async def execute(job):
         from app.domains.stock.api.analysis import run_company_analysis
         p = job.payload
         await run_company_analysis(job.response['analysis_id'], p['ticker'], p['include_news'], p['include_fundamentals'], p['include_technical'], p['include_macro'])
+    elif job.kind == 'ingestion':
+        # First-time ticker data reserved by a read route (audit O02). The
+        # provider/scoring work runs here, on the worker's own session, so an
+        # API exit cannot abandon it mid-pipeline.
+        from app.domains.stock.services.company_resolution import ingest_missing_ticker
+        async with async_session_factory() as db:
+            company = await ingest_missing_ticker(job.payload['ticker'], db)
+        if company is None:
+            # Nothing persisted: report rather than complete, so the row stays
+            # retryable instead of silently reporting success.
+            raise ValueError('Ingestion produced no company record')
     elif job.kind == 'backtest':
         from app.domains.stock.models.backtest import BacktestRun
         from app.domains.stock.scoring.backtest import BacktestEngine

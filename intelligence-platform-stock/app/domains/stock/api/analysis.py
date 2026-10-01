@@ -224,16 +224,18 @@ async def create_company_analysis(
     )):
         raise HTTPException(status_code=422, detail="This analysis engine requires all data sources")
 
-    # Verify company exists — auto-ingest if not tracked yet
-    result = await db.execute(
-        select(Company).where(Company.ticker == request.ticker.upper())
+    # Company must exist before an analysis row can reference it. An untracked
+    # ticker is scheduled for durable ingestion and the request answers
+    # promptly: running the pipeline here would repeat the audit O02 problem
+    # inside a paid-work endpoint that is already rate limited.
+    from app.domains.stock.services.company_resolution import (
+        get_or_schedule_missing,
+        ingestion_pending,
     )
-    company = result.scalar_one_or_none()
-    if not company:
-        from app.domains.stock.api.stocks import _auto_ingest_ticker
-        company = await _auto_ingest_ticker(request.ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {request.ticker} not found")
+
+    company = await get_or_schedule_missing(request.ticker, db)
+    if company is None:
+        raise ingestion_pending(request.ticker)
 
     from app.core.jobs import reserve_job
     job = await reserve_job(db, fastapi_request, "analysis", request.model_dump(mode="json"))

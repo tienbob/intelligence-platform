@@ -4,7 +4,7 @@ Company API endpoints.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,17 +43,21 @@ async def list_companies(
 @router.get("/{ticker}", response_model=CompanyResponse)
 async def get_company(ticker: str, db: AsyncSession = Depends(get_db)):
     """Get company details by ticker."""
-    result = await db.execute(
-        select(Company).where(Company.ticker == ticker.upper())
-    )
-    company = result.scalar_one_or_none()
-    if not company:
-        # Auto-ingest the ticker so direct navigation self-populates.
-        # NOTE: the module is app.domains.stock.api.stocks — the earlier
-        # `api.v1.stocks` path never existed and raised ModuleNotFoundError on
-        # every unknown ticker (audit F01).
-        from app.domains.stock.api.stocks import _auto_ingest_ticker
-        company = await _auto_ingest_ticker(ticker, db)
-        if not company:
-            raise HTTPException(status_code=404, detail=f"Company {ticker} not found")
+    company = (
+        await db.execute(select(Company).where(Company.ticker == ticker.upper()))
+    ).scalar_one_or_none()
+    if company is None:
+        # Schedule durable first-time ingestion instead of running the provider
+        # pipeline inside the request (audit O02). The lazy-ingestion import
+        # also used to point at the nonexistent `api.v1.stocks` module, which
+        # raised ModuleNotFoundError on every unknown ticker (audit F01); it
+        # now resolves through one shared service module.
+        from app.domains.stock.services.company_resolution import (
+            get_or_schedule_missing,
+            ingestion_pending,
+        )
+
+        company = await get_or_schedule_missing(ticker, db)
+        if company is None:
+            raise ingestion_pending(ticker)
     return CompanyResponse.model_validate(company)

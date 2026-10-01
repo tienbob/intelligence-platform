@@ -30,8 +30,14 @@ def user_request(user_id: str = "7", role: str = "USER"):
 # ── F01: auto-ingest imports resolve ─────────────────────────────
 
 
-def test_unknown_ticker_auto_ingest_imports_exist():
-    """Both lazy-ingestion paths must import the module that actually exists."""
+def test_unknown_ticker_resolution_imports_exist():
+    """Lazy-ingestion paths must import the module that actually exists.
+
+    The original defect (audit F01) was `app.domains.stock.api.v1.stocks`,
+    which never existed and raised ModuleNotFoundError on every untracked
+    ticker. Resolution later moved to one shared service module (audit O02).
+    """
+    expected = "app.domains.stock.services.company_resolution"
     for filename in ("companies.py", "financials.py"):
         tree = ast.parse((API_DIR / filename).read_text())
         modules = [
@@ -39,11 +45,26 @@ def test_unknown_ticker_auto_ingest_imports_exist():
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module
         ]
-        assert "app.domains.stock.api.stocks" in modules, filename
+        assert expected in modules, filename
         assert not [m for m in modules if m.startswith("app.domains.stock.api.v1")], filename
     # the target module is on disk (the old api/v1/ package never was)
     assert (API_DIR / "stocks.py").exists()
     assert not (API_DIR / "v1").exists()
+    assert (API_DIR.parent / "services" / "company_resolution.py").exists()
+
+
+def test_request_paths_never_run_the_ingestion_pipeline():
+    """Audit O02: a GET/POST must not execute the provider/scoring pipeline.
+
+    Request handlers may only reserve durable work, so the pipeline entry
+    point must be unreachable from the api package.
+    """
+    forbidden = ("_auto_ingest_ticker", "ingest_missing_ticker")
+    for path in sorted(API_DIR.glob("*.py")):
+        source = path.read_text()
+        for name in forbidden:
+            assert name not in source, f"{path.name} still calls {name} in-request"
+
 
 
 # ── F03: alert read state + ownership ────────────────────────────
@@ -70,7 +91,7 @@ def test_list_alerts_reports_read_state_and_ownership():
     assert response.alerts[0].is_read is False
     assert response.alerts[0].can_manage is True   # own row
     assert response.alerts[1].is_read is True      # per-user receipt state
-    assert response.alerts[1].can_manage is False  # shared rows are view-only
+    assert response.alerts[1].can_manage is True  # viewer manages their own receipt
 
 
 def test_mark_alert_read_rejects_other_users_row():
