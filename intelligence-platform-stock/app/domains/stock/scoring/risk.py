@@ -300,12 +300,24 @@ class RiskEngine:
         logger.info("Calculated risk metrics for company_id=%d: score=%.1f", company_id, risk_score)
         return metric
 
+    async def get_latest_risks(self, company_ids: list[int]) -> dict[int, RiskMetric]:
+        """Fetch one deterministic latest row per requested company in one query."""
+        if not company_ids:
+            return {}
+        result = await self.session.execute(
+            select(RiskMetric)
+            .where(RiskMetric.company_id.in_(set(company_ids)))
+            .distinct(RiskMetric.company_id)
+            .order_by(RiskMetric.company_id, RiskMetric.timestamp.desc(), RiskMetric.id.desc())
+        )
+        return {row.company_id: row for row in result.scalars().all()}
+
     async def get_latest_risk(self, company_id: int) -> RiskMetric | None:
         """Get the most recent risk metrics."""
         result = await self.session.execute(
             select(RiskMetric)
             .where(RiskMetric.company_id == company_id)
-            .order_by(desc(RiskMetric.timestamp))
+            .order_by(desc(RiskMetric.timestamp), desc(RiskMetric.id))
             .limit(1)
         )
         return result.scalar_one_or_none()

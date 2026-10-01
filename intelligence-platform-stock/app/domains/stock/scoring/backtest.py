@@ -204,6 +204,23 @@ class BacktestEngine:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def _prices_by_company(self, company_ids, end_date, start_date=None):
+        """Load daily histories in bounded ID batches, preserving chronological order."""
+        histories = {}
+        for offset in range(0, len(company_ids), 500):
+            query = (select(StockPrice)
+                     .options(load_only(StockPrice.company_id, StockPrice.timestamp,
+                                        StockPrice.close, StockPrice.volume, raiseload=True))
+                     .where(StockPrice.company_id.in_(company_ids[offset:offset + 500]),
+                            StockPrice.interval == "1d", StockPrice.timestamp <= end_date)
+                     .order_by(StockPrice.company_id, StockPrice.timestamp, StockPrice.id))
+            if start_date is not None:
+                query = query.where(StockPrice.timestamp >= start_date)
+            result = await self.session.execute(query)
+            for price in result.scalars().all():
+                histories.setdefault(price.company_id, []).append(price)
+        return histories
+
     # ── Point-in-time dataset generation ──────────────────────────
 
     async def create_snapshot(
@@ -217,8 +234,8 @@ class BacktestEngine:
         """
         Build a point-in-time dataset snapshot (Section 162).
 
-        Captures prices, scores, fundamentals, events, and news as of a
-        specific date. This prevents look-ahead bias in backtesting.
+        Captures daily prices and latest scores as of the supplied date.
+        Other decision-input coverage is disclosed on each backtest run.
         """
         # Resolve companies
         company_query = select(Company)
@@ -229,40 +246,30 @@ class BacktestEngine:
         companies_result = await self.session.execute(company_query)
         companies = companies_result.scalars().all()
 
-        # Capture prices as of the snapshot date
-        prices: dict[str, Any] = {}
-        for company in companies:
-            price_result = await self.session.execute(
-                select(StockPrice)
-                .where(StockPrice.company_id == company.id)
-                .where(StockPrice.interval == "1d")
-                .where(StockPrice.timestamp <= as_of)
-                .order_by(StockPrice.timestamp)
-            )
-            price_rows = price_result.scalars().all()
-            if price_rows:
-                prices[company.ticker] = [
-                    {
-                        "timestamp": p.timestamp.isoformat(),
-                        "close": p.close,
-                        "volume": p.volume,
-                    }
-                    for p in price_rows
-                ]
+        company_ids = [company.id for company in companies]
+        histories = await self._prices_by_company(company_ids, as_of)
+        prices = {
+            company.ticker: [{"timestamp": p.timestamp.isoformat(), "close": p.close, "volume": p.volume}
+                             for p in histories[company.id]]
+            for company in companies if company.id in histories
+        }
 
-        # Capture scores as of the snapshot date
         scores: dict[str, Any] = {}
-        for company in companies:
+        ticker_by_id = {company.id: company.ticker for company in companies}
+        for offset in range(0, len(company_ids), 500):
             score_result = await self.session.execute(
                 select(InvestmentScore)
-                .where(InvestmentScore.company_id == company.id)
-                .where(InvestmentScore.timestamp <= as_of)
-                .order_by(desc(InvestmentScore.timestamp))
-                .limit(1)
+                .options(load_only(InvestmentScore.company_id, InvestmentScore.timestamp,
+                                   InvestmentScore.overall_score, InvestmentScore.recommendation,
+                                   InvestmentScore.scoring_model, InvestmentScore.scoring_version,
+                                   raiseload=True))
+                .where(InvestmentScore.company_id.in_(company_ids[offset:offset + 500]),
+                       InvestmentScore.timestamp <= as_of)
+                .distinct(InvestmentScore.company_id)
+                .order_by(InvestmentScore.company_id, InvestmentScore.timestamp.desc(), InvestmentScore.id.desc())
             )
-            score = score_result.scalar_one_or_none()
-            if score:
-                scores[company.ticker] = {
+            for score in score_result.scalars().all():
+                scores[ticker_by_id[score.company_id]] = {
                     "timestamp": score.timestamp.isoformat(),
                     "overall_score": score.overall_score,
                     "recommendation": score.recommendation,
@@ -541,17 +548,10 @@ class BacktestEngine:
         companies_result = await self.session.execute(company_query)
         companies = companies_result.scalars().all()
 
+        histories = await self._prices_by_company([c.id for c in companies], end_date, start_date)
         price_data: dict[str, pd.DataFrame] = {}
         for company in companies:
-            price_result = await self.session.execute(
-                select(StockPrice)
-                .where(StockPrice.company_id == company.id)
-                .where(StockPrice.interval == "1d")
-                .where(StockPrice.timestamp >= start_date)
-                .where(StockPrice.timestamp <= end_date)
-                .order_by(StockPrice.timestamp)
-            )
-            price_rows = price_result.scalars().all()
+            price_rows = histories.get(company.id, [])
             if not price_rows:
                 logger.warning(
                     "Backtest: requested ticker %s has no daily price data "
@@ -1663,12 +1663,13 @@ class BacktestEngine:
         )
         return result.scalar_one_or_none()
 
-    async def get_trades(self, run_id: int, limit: int = 100) -> list[BacktestTrade]:
+    async def get_trades(self, run_id: int, limit: int = 100, offset: int = 0) -> list[BacktestTrade]:
         """Get trades for a run."""
         result = await self.session.execute(
             select(BacktestTrade)
             .where(BacktestTrade.run_id == run_id)
-            .order_by(BacktestTrade.trade_date)
+            .order_by(BacktestTrade.trade_date, BacktestTrade.id)
+            .offset(offset)
             .limit(limit)
         )
         return list(result.scalars().all())

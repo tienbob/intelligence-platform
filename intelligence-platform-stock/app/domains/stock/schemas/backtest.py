@@ -165,6 +165,7 @@ class BacktestTradeResponse(BaseModel):
 class BacktestTradeListResponse(BaseModel):
     """List of backtest trades."""
 
+    has_more: bool = False
     trades: list[BacktestTradeResponse]
 
 
@@ -221,4 +222,5 @@ class BacktestRunDetailResponse(BaseModel):
     run: BacktestRunResponse
     result: Optional[BacktestResultResponse] = None
     benchmark: Optional[BacktestBenchmarkResponse] = None
+    has_more: bool = False
     trades: list[BacktestTradeResponse] = Field(default_factory=list)

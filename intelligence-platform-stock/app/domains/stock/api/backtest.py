@@ -138,13 +138,14 @@ async def get_backtest_run(
 
     result = await engine.get_result(run_id)
     benchmark = await engine.get_benchmark(run_id)
-    trades = await engine.get_trades(run_id)
+    trades = await engine.get_trades(run_id, limit=101)
 
     return BacktestRunDetailResponse(
         run=BacktestRunResponse.model_validate(run),
         result=BacktestResultResponse.model_validate(result) if result else None,
         benchmark=BacktestBenchmarkResponse.model_validate(benchmark) if benchmark else None,
-        trades=[BacktestTradeResponse.model_validate(t) for t in trades],
+        has_more=len(trades) > 100,
+        trades=[BacktestTradeResponse.model_validate(t) for t in trades[:100]],
     )
 
 
@@ -153,6 +154,7 @@ async def get_backtest_trades(
     run_id: int,
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """Get trades for a backtest run (ownership via parent run row)."""
@@ -163,7 +165,8 @@ async def get_backtest_trades(
     if not owns_row(run.user_id, get_actor(request)):
         raise HTTPException(status_code=404, detail="Backtest run not found")
 
-    trades = await engine.get_trades(run_id, limit=limit)
+    trades = await engine.get_trades(run_id, limit=limit + 1, offset=offset)
     return BacktestTradeListResponse(
-        trades=[BacktestTradeResponse.model_validate(t) for t in trades],
+        has_more=len(trades) > limit,
+        trades=[BacktestTradeResponse.model_validate(t) for t in trades[:limit]],
     )
