@@ -93,7 +93,7 @@ class _PersistSession:
 
 def _install_framework_fake(monkeypatch):
     pipe = _FakePipeline()
-    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda: pipe)
+    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda **kw: pipe)
 
     async def loader(session, company_id, score_id):
         assert score_id == 101
@@ -200,7 +200,7 @@ def test_framework_failure_raises(monkeypatch):
                 metadata={"stages": {"llm": "failed: boom"}},
             )
 
-    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda: _FailPipe())
+    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda **kw: _FailPipe())
 
     async def go():
         try:
@@ -219,3 +219,31 @@ def test_framework_failure_raises(monkeypatch):
 if __name__ == "__main__":
     print("run via pytest")
 
+
+
+def test_framework_preserves_complete_llm_response_and_claim_rows(monkeypatch):
+    from app.domains.stock.models.analysis import AnalysisSource
+    pipe, loader = _install_framework_fake(monkeypatch)
+    result = _fake_pipeline_result()
+    payload = {
+        'summary': 'Full response', 'confidence': 0.72, 'investment_thesis': 'Preserved thesis',
+        'bull_case': ['Bull case'], 'bear_case': ['Bear case'],
+        'source_backed_claims': [{'claim': 'Revenue grew', 'source': {'type': 'financial', 'source': 'SEC', 'metric': 'revenue', 'value': 123, 'period': '2026-Q2'}}],
+        'evidence': {'evidence_sources': [{'id': 'news_1', 'source_name': 'finnhub'}], 'source_count': 1},
+        '_meta': {'model': 'fake-model', 'provider': 'fake', 'prompt_version': '1.0', 'tokens_used': 42},
+    }
+    result.metadata['llm_output'] = payload
+    result.metadata['rag_context'] = {'news': [{'id': 1}]}
+    async def run(request): return result
+    pipe.run = run
+    session = _PersistSession()
+    saved = asyncio.run(ca.execute_company_analysis(session, _FakeCompany(), engine='framework', score_loader=loader))
+    assert saved.analysis.llm_analysis['investment_thesis'] == 'Preserved thesis'
+    assert saved.analysis.llm_analysis['confidence'] == 0.72
+    assert saved.analysis.confidence_score == 0.9
+    assert saved.analysis.llm_analysis['_evidence'] == payload['evidence']
+    assert saved.analysis.llm_analysis['_input_context']['rag_context'] == {'news': [{'id': 1}]}
+    claims = [row for row in session.added if isinstance(row, AnalysisSource)]
+    assert len(claims) == 1
+    assert claims[0].claim == 'Revenue grew'
+    assert claims[0].source_name == 'SEC'

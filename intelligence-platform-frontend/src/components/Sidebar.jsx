@@ -9,7 +9,7 @@ const navItems = [
   { to: '/opportunities', label: 'Opportunities', icon: 'insights' },
   { to: '/news', label: 'News', icon: 'newspaper' },
   { to: '/events', label: 'Events', icon: 'event' },
-  { to: '/analysis', label: 'AI Jobs', icon: 'memory' },
+  { to: '/analysis', label: 'AI Analysis', icon: 'memory' },
   { to: '/backtest', label: 'Backtest', icon: 'history' },
   { to: '/alerts', label: 'Alerts', icon: 'notification_important' },
 ];

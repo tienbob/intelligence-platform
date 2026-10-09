@@ -410,6 +410,7 @@ async def get_analysis(
         risk_score=analysis.risk_score,
         confidence=analysis.confidence_score,
         confidence_breakdown=confidence_breakdown,
+        data_quality=((analysis.llm_analysis or {}).get("_score_snapshot", {}).get("validation_issues") or {}).get("data_quality"),
         source_backed_claims=source_claims,
         analysis=analysis_payload,
         recommendation=recommendation,

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getOpportunities } from '../services/api';
+import { opportunityScore } from '../services/opportunityScore';
 import StatusChip from '../components/StatusChip';
 import ProgressBar from '../components/ProgressBar';
 
@@ -41,7 +42,7 @@ function ScoreComponents({ opp, onNavigate }) {
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs text-on-surface-variant uppercase tracking-wider data-font">Score components</span>
           <span className="text-[10px] text-on-surface-variant data-font">
-            Screening model
+            {opp.score_source === 'analysis' ? 'Deep AI Analysis' : 'Screening model'}
             {opp.scoring_version ? ` · v${opp.scoring_version}` : ''}
             {opp.score_timestamp ? ` · ${formatDate(opp.score_timestamp)}` : ''}
           </span>
@@ -94,6 +95,7 @@ function ScoreComponents({ opp, onNavigate }) {
 
 export default function Opportunities() {
   const navigate = useNavigate();
+  const requestSequence = useRef(0);
   const [opportunities, setOpportunities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedTicker, setExpandedTicker] = useState(null);
@@ -104,24 +106,38 @@ export default function Opportunities() {
   const [applied, setApplied] = useState({ min_score: '0', sector: '' });
   const hasActiveFilters = applied.min_score !== '0' || !!applied.sector.trim();
 
-  const loadOpportunities = useCallback(async () => {
-    setLoading(true);
+  const loadOpportunities = useCallback(async (background = false) => {
+    const sequence = ++requestSequence.current;
+    if (!background) setLoading(true);
     setError(null);
     try {
       const params = { limit: 20 };
       if (Number(applied.min_score) > 0) params.min_score = Number(applied.min_score);
       if (applied.sector.trim()) params.sector = applied.sector.trim();
       const data = await getOpportunities(params);
+      if (sequence !== requestSequence.current) return;
       setOpportunities(data?.opportunities || []);
     } catch (e) {
+      if (sequence !== requestSequence.current) return;
       setError(e.message || 'Failed to load opportunities');
-      setOpportunities([]);
+      if (!background) setOpportunities([]);
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
   }, [applied]);
 
-  useEffect(() => { loadOpportunities(); }, [loadOpportunities]);
+  useEffect(() => {
+    loadOpportunities();
+    const refresh = () => { if (!document.hidden) loadOpportunities(true); };
+    const timer = window.setInterval(refresh, 30000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [loadOpportunities]);
 
   function applyFilters(event) {
     event.preventDefault();
@@ -143,7 +159,7 @@ export default function Opportunities() {
         <div>
           <h1 className="text-4xl font-bold text-on-surface">Market Opportunities</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            AI-scored opportunities across the market.
+            Latest completed deep-dive scores, with screening scores for companies awaiting analysis.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -218,7 +234,7 @@ export default function Opportunities() {
                   <thead>
                     <tr className="bg-surface-container-highest border-b border-outline-variant">
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Ticker</th>
-                      <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Screening Score</th>
+                      <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">AI Score</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Risk</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Volatility</th>
                       <th className="py-2 px-4 text-xs text-on-surface-variant font-semibold">Sector</th>
@@ -228,6 +244,7 @@ export default function Opportunities() {
                   </thead>
                   <tbody className="text-sm data-font text-on-surface">
                     {opportunities.map((opp) => {
+                      const displayedScore = opportunityScore(opp);
                       const signal = signalFor(opp.recommendation);
                       const expanded = expandedTicker === opp.ticker;
                       return (
@@ -247,8 +264,8 @@ export default function Opportunities() {
                             <td className="py-2 px-4 font-bold">{opp.ticker}</td>
                             <td className="py-2 px-4">
                               <div className="flex items-center gap-2">
-                                <ProgressBar value={opp.score || 0} max={100} color={colorFor(opp.score)} showLabel={false} />
-                                <span className="text-on-surface-variant">{opp.score != null ? Number(opp.score).toFixed(1) : '—'}</span>
+                                <ProgressBar value={displayedScore ?? 0} max={100} color={colorFor(displayedScore)} showLabel={false} />
+                                <span className="text-on-surface-variant">{displayedScore != null ? Number(displayedScore).toFixed(1) : '—'}</span>
                               </div>
                             </td>
                             <td className="py-2 px-4">

@@ -26,6 +26,7 @@ Phase 6 (#159):
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 from typing import Any
 
 from sqlalchemy import desc, select
@@ -35,7 +36,7 @@ from app.domains.stock.config import get_stock_config
 from app.core.database import commit_session
 from app.core.logging import get_logger
 from app.domains.stock.models.analysis import InvestmentScore, RiskMetric, TechnicalIndicator
-from app.domains.stock.models.financial import FinancialMetric
+from app.domains.stock.models.financial import FinancialMetric, FinancialStatement
 from app.domains.stock.models.news import CompanyNews, News
 from app.domains.stock.models.stock_price import StockPrice
 from app.domains.stock.models.event import MarketEvent
@@ -87,7 +88,7 @@ class DataQualityEngine:
     is scored 0..1 based on how much recent data is available.
     """
 
-    # Minimum days of data required for full quality per component
+    # Recency windows for the availability checks
     _FULL_DATA_DAYS = {
         "price": 30,
         "fundamental": 90,
@@ -119,6 +120,67 @@ class DataQualityEngine:
             return 0.5
         return 0.0
 
+    @staticmethod
+    def financial_completeness(metrics: Any, statement: Any) -> dict[str, Any]:
+        """Measure usable scoring fields; alternative valuation ratios are allowed."""
+        groups = {
+            "fundamental": ("roe", "net_margin", "roa", "debt_equity"),
+            "valuation": ("pe_ratio", "ps_ratio", "pb_ratio", "fcf_yield"),
+            "growth": ("revenue_growth", "earnings_growth", "fcf_growth"),
+        }
+        missing, coverage = {}, {}
+        for component, fields in groups.items():
+            valid = []
+            for field in fields:
+                value = getattr(metrics, field, None)
+                usable = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                if field in ("pe_ratio", "ps_ratio", "pb_ratio"):
+                    usable = usable and value > 0
+                if usable:
+                    valid.append(field)
+            missing[component] = [field for field in fields if field not in valid]
+            # Any three valuation inputs suffice; P/E is not mandatory.
+            required = 3 if component == "valuation" else len(fields)
+            coverage[component] = min(1.0, len(valid) / required)
+        period = getattr(statement, "period", None)
+        try:
+            age = (datetime.now(timezone.utc).date() - datetime.fromisoformat(period).date()).days
+            freshness = 1.0 if 0 <= age <= 150 else 0.5 if 150 < age <= 400 else 0.0
+        except (ValueError, TypeError):
+            freshness = 0.0
+        return {
+            "coverage": coverage,
+            "missing_inputs": missing,
+            "fallback_components": [name for name, value in coverage.items() if value == 0],
+            "reporting_period": period,
+            "reporting_freshness": freshness,
+            "overall": sum(coverage.values()) / len(coverage) * freshness,
+        }
+
+    async def _financial_quality(self, company_id: int) -> dict[str, Any]:
+        metrics = (await self.session.execute(
+            select(FinancialMetric).where(FinancialMetric.company_id == company_id)
+            .order_by(FinancialMetric.timestamp.desc(), FinancialMetric.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        statement = (await self.session.execute(
+            select(FinancialStatement).where(FinancialStatement.company_id == company_id)
+            .order_by(FinancialStatement.period.desc(), FinancialStatement.period_type.desc()).limit(1)
+        )).scalar_one_or_none()
+        quality = self.financial_completeness(metrics, statement)
+        timestamp = getattr(metrics, "timestamp", None)
+        if timestamp is None:
+            quality["overall"] = 0.0
+        else:
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            if timestamp < datetime.now(timezone.utc) - timedelta(days=90):
+                quality["overall"] *= 0.5
+        return quality
+
+    @staticmethod
+    async def _financial_quality_score(quality: dict[str, Any]) -> float:
+        return quality["overall"]
+
     async def assess(self, company_id: int) -> dict[str, Any]:
         """
         Compute data quality scores for each component.
@@ -131,8 +193,6 @@ class DataQualityEngine:
         checks = {
             "price": lambda: self._data_available(
                 company_id, StockPrice, "timestamp", self._FULL_DATA_DAYS["price"]),
-            "fundamental": lambda: self._data_available(
-                company_id, FinancialMetric, "timestamp", self._FULL_DATA_DAYS["fundamental"]),
             "technical": lambda: self._data_available(
                 company_id, TechnicalIndicator, "timestamp", self._FULL_DATA_DAYS["technical"]),
         }
@@ -183,6 +243,9 @@ class DataQualityEngine:
 
         checks["events"] = events_check
 
+        financial_quality = await self._financial_quality(company_id)
+        checks["fundamental"] = lambda: self._financial_quality_score(financial_quality)
+
         component_scores: dict[str, float] = {}
         for name, check in checks.items():
             try:
@@ -201,6 +264,7 @@ class DataQualityEngine:
         sufficient = overall_score >= settings.MIN_DATA_QUALITY_FOR_RECOMMENDATION
 
         return {
+            "financial_inputs": financial_quality,
             "overall": round(overall_score, 4),
             "components": component_scores,
             "sufficient": sufficient,
@@ -218,6 +282,10 @@ class InvestmentScoringEngine:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.data_quality = DataQualityEngine(session)
+
+    @staticmethod
+    def _bounded_score(value: float) -> float:
+        return max(0.0, min(100.0, value)) if math.isfinite(value) else 50.0
 
     @staticmethod
     def _normalize(value: float | None, min_val: float, max_val: float, invert: bool = False) -> float:
@@ -280,7 +348,7 @@ class InvestmentScoringEngine:
             scores.append(self._normalize(m.pb_ratio, 0.5, 5, invert=True))
         # FCF yield: 0-10% → 0-100 (higher is better)
         if m.fcf_yield is not None:
-            scores.append(min(100, m.fcf_yield * 10))
+            scores.append(max(0.0, min(100.0, m.fcf_yield * 10)))
 
         return sum(scores) / len(scores) if scores else 50.0
 
@@ -446,7 +514,10 @@ class InvestmentScoringEngine:
             sufficient = data_quality.get("sufficient", False)
             if sufficient:
                 # Map quality to 0.5..1.0 range
-                return round(0.5 + 0.5 * quality, 4)
+                financial = data_quality.get("financial_inputs", {})
+                # Neutral fallback scores must never imply strong evidence.
+                ceiling = 0.5 if financial.get("fallback_components") else 0.95
+                return round(min(ceiling, quality), 4)
             else:
                 # Insufficient data — lower confidence
                 return round(min(0.5, quality), 4)
@@ -555,6 +626,11 @@ class InvestmentScoringEngine:
         catalyst = await self._score_catalyst(company_id)
         risk = await self._score_risk(company_id)
 
+        fundamental, valuation, growth, technical, sentiment, catalyst, risk = (
+            self._bounded_score(value) for value in
+            (fundamental, valuation, growth, technical, sentiment, catalyst, risk)
+        )
+
         # Risk is a penalty, not a weighted component.
         # Positive weights sum to 0.95; risk subtracts up to 0.15.
         # Raw range is [-15, 95] — this is intentional: risk can push the
@@ -623,8 +699,8 @@ class InvestmentScoringEngine:
         # Phase 6: Persist data quality and validation info as metadata
         if hasattr(score, "data_quality_score"):
             score.data_quality_score = data_quality_result["overall"]
-        if validation_issues and hasattr(score, "validation_issues"):
-            score.validation_issues = {"issues": validation_issues}
+        if hasattr(score, "validation_issues"):
+            score.validation_issues = {"issues": validation_issues, "data_quality": data_quality_result}
 
         await commit_session(self.session)
 

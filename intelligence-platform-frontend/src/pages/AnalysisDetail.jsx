@@ -104,7 +104,7 @@ export default function AnalysisDetail() {
           className="text-on-surface-variant hover:text-on-surface transition-colors mb-4 flex items-center gap-1 text-sm"
         >
           <span className="material-symbols-outlined text-sm">arrow_back</span>
-          Back to AI Jobs
+          Back to AI Analysis
         </button>
         <div className="card py-16 text-center text-on-surface-variant">
           <span className="material-symbols-outlined text-5xl mb-4 block text-error">error</span>
@@ -132,7 +132,7 @@ export default function AnalysisDetail() {
         className="text-on-surface-variant hover:text-on-surface transition-colors mb-4 flex items-center gap-1 text-sm"
       >
         <span className="material-symbols-outlined text-sm">arrow_back</span>
-        Back to AI Jobs
+        Back to AI Analysis
       </button>
 
       {data.status === 'failed' && <section className="card mb-4" aria-label="Analysis failed">
@@ -197,7 +197,7 @@ export default function AnalysisDetail() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-gutter mb-6">
         <MetricTile
           label="Investment Score"
-          value={data.investment_score != null ? data.investment_score.toFixed(0) : '—'}
+          value={data.investment_score != null ? data.investment_score.toFixed(1) : '—'}
           icon="trending_up"
           color={data.investment_score > 60 ? 'tertiary' : data.investment_score > 30 ? 'secondary' : 'error'}
         />
@@ -402,9 +402,9 @@ export default function AnalysisDetail() {
               </h3>
               <div className="space-y-3">
                 {[
-                  { label: 'Data', value: cb.data },
-                  { label: 'Quantitative', value: cb.quantitative },
-                  { label: 'LLM', value: cb.llm },
+                  { label: 'Data completeness', value: cb.data },
+                  { label: 'Score confidence', value: cb.quantitative },
+                  { label: 'AI self-assessment', value: cb.llm },
                   { label: 'Overall', value: cb.overall },
                 ].map((item) => (
                   <div key={item.label}>
@@ -423,6 +423,43 @@ export default function AnalysisDetail() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {data.data_quality?.financial_inputs && (
+            <div className="card">
+              <h3 className="text-lg font-semibold text-on-surface mb-3">Financial Data Coverage</h3>
+              <p className="text-sm text-on-surface-variant mb-2">
+                Reporting period: {data.data_quality.financial_inputs.reporting_period || 'Unavailable'}
+              </p>
+              <p className="text-xs text-on-surface-variant mb-3">
+                Confidence measures available evidence, not the probability of an investment outcome.
+              </p>
+              {data.data_quality.financial_inputs.fallback_components?.length > 0 && (
+                <p className="text-sm text-error mb-3">
+                  Neutral score of 50 used because inputs are missing: {data.data_quality.financial_inputs.fallback_components.join(', ')}.
+                </p>
+              )}
+              {data.data_quality.financial_inputs.reporting_freshness < 1 && (
+                <p className="text-sm text-error mb-3">The financial reporting period is stale or unavailable.</p>
+              )}
+              {Object.entries(data.data_quality.financial_inputs.missing_inputs || {}).filter(([, fields]) => fields.length > 0).map(([component, fields]) => (
+                <p key={component} className="text-sm text-on-surface-variant mb-1">
+                  Missing {component} inputs: {fields.map((field) => field.replaceAll('_', ' ')).join(', ')}.
+                </p>
+              ))}
+            </div>
+          )}
+
+          {analysis.citation_warnings?.length > 0 && (
+            <div className="card">
+              <h3 className="text-lg font-semibold text-on-surface mb-3">Evidence Limitations</h3>
+              <p className="text-sm text-on-surface-variant mb-3">These explanations were excluded because their cited passages did not provide enough support.</p>
+              <ul className="space-y-2">
+                {analysis.citation_warnings.map((warning, i) => (
+                  <li key={i} className="text-sm text-on-surface-variant break-words">{warning.claim}</li>
+                ))}
+              </ul>
             </div>
           )}
 

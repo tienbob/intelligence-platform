@@ -48,7 +48,7 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 # Prompt version registry (Section 55)
 PROMPT_VERSIONS = {
-    "company_analysis": "1.0",
+    "company_analysis": "1.1",
     "market_analysis": "1.0",
     "risk_analysis": "1.0",
     "portfolio_analysis": "1.0",
@@ -133,10 +133,17 @@ class LLMService:
         # §32: Inject available evidence source IDs into the LLM context so the
         # model can cite them via `evidence_ids` in its structured output.
         if evidence_attributor is not None:
-            context.setdefault(
-                "available_evidence_ids",
-                sorted(evidence_attributor.source_registry.keys()),
-            )
+            snapshot_sources = []
+            for item in (context.get("news_snapshot") or {}).get("recent_news", []):
+                if item.get("id") is not None:
+                    snapshot_sources.append({
+                        "id": item["id"],
+                        "content": f"{item.get('title', '')} {item.get('summary') or ''}",
+                        "metadata": {"source": item.get("source"), "published_at": item.get("published_at")},
+                    })
+            evidence_attributor.register_sources({"snapshot_news": snapshot_sources})
+            context["evidence_passages"] = list(evidence_attributor.source_registry.values())
+            context["available_evidence_ids"] = sorted(evidence_attributor.source_registry.keys())
 
         # Build the user message from context
         context_json = json.dumps(context, indent=2, default=str)
@@ -168,10 +175,8 @@ class LLMService:
         # article); drop those citations rather than assert false links.
         if evidence_attributor is not None:
             for item in result.get("causes", []):
-                if not item.get("evidence_ids"):
-                    continue
                 supported = evidence_attributor.filter_supported_evidence_ids(item)
-                dropped = [eid for eid in item["evidence_ids"] if eid not in supported]
+                dropped = [eid for eid in item.get("evidence_ids", []) if eid not in supported]
                 if dropped:
                     logger.warning(
                         "Dropped unsupported evidence citation(s) %s for claim: %s",
@@ -179,6 +184,14 @@ class LLMService:
                         (item.get("cause") or item.get("claim") or "")[:80],
                     )
                 item["evidence_ids"] = supported
+                item["evidence_status"] = "plausible_support" if supported else "unverified"
+            unverified = [item for item in result.get("causes", []) if not item.get("evidence_ids")]
+            if unverified:
+                result["citation_warnings"] = [
+                    {"claim": item.get("cause"), "reason": "No cited passage passed the citation support check"}
+                    for item in unverified
+                ]
+                result["causes"] = [item for item in result.get("causes", []) if item.get("evidence_ids")]
 
         # Phase 5: Evidence attribution (Section 32) — attach the evidence
         # package backing whichever `evidence_ids` the LLM cited. The valid

@@ -112,6 +112,7 @@ class AnalysisResponse(BaseModel):
     risk_score: Optional[float] = None
     confidence: Optional[float] = None
     confidence_breakdown: Optional[ConfidenceBreakdown] = None
+    data_quality: Optional[dict[str, Any]] = None
     source_backed_claims: list[dict[str, Any]] = Field(default_factory=list)
     analysis: Optional[dict[str, Any]] = None
     recommendation: Optional[InvestmentRecommendation] = None
@@ -148,16 +149,15 @@ class ScoreComponent(BaseModel):
 
 
 class InvestmentOpportunity(BaseModel):
-    """Opportunity row with score breakdown + deep-analysis linkage.
+    """Latest visible deep-dive score, or screening when no scored analysis exists.
 
-    ``score``/``recommendation``/``components``/``scoring_*`` all describe the
-    SAME screening row (that is also what filtering/ordering use). The linked
-    deep analysis is reported through the ``analysis_*`` fields, including its
-    own ``analysis_score`` (audit F07).
+    Score, recommendation, components and provenance all use score_source.
     """
 
     ticker: str
     score: float
+    score_source: str = "screening"
+    screening_score: Optional[float] = None
     # None = no risk metric recorded; render "—" rather than inventing a value.
     risk_score: Optional[float] = None
     volatility: Optional[float] = None
@@ -170,7 +170,7 @@ class InvestmentOpportunity(BaseModel):
     analysis_timestamp: Optional[datetime] = None
     analysis_score: Optional[float] = None
 
-    # Screening-model breakdown (always present — the "actual calculation")
+    # Breakdown for the selected source; missing historical components stay null.
     components: list[ScoreComponent] = Field(default_factory=list)
     scoring_model: Optional[str] = None
     scoring_version: Optional[str] = None

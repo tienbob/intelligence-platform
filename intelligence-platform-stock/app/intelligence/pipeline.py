@@ -20,22 +20,9 @@ The domain knows WHAT intelligence means.
     and optional-capability scoring (verified by
     tests/framework/test_pipeline.py).
 
-    It is still NOT wired into the production analysis execution path.
-    Nothing instantiates ``IntelligencePipeline`` in production and no
-    production code calls ``run()``. Per plan §9.6, switch over only
-    after the golden comparison passes:
-
-        production path  → baseline_aapl.json
-        pipeline.run()   → pipeline_aapl.json
-
-    Production company analysis currently runs through::
-
-        api/analysis.py / analysis_worker.py
-            → InvestmentScoringEngine (scoring/investment_scoring.py)
-
-    Do not assume changes here affect production analysis until the
-    pipeline is explicitly integrated (future architecture task: decide
-    whether it replaces, wraps, or orchestrates InvestmentScoringEngine).
+    Stock production can select this pipeline with ANALYSIS_ENGINE=framework.
+    Domains supply persisted observations, context, retrieval, and scoring;
+    this orchestrator remains independent of domain models.
 
     Related deliberate decisions already encoded in this file:
       * ``_ingest`` treats providers lacking ``fetch(entity_ref)`` as an
@@ -100,9 +87,11 @@ class IntelligencePipeline:
         embedding_service: Any = None,
         evidence_service: Any = None,
         validation_service: Any = None,
+        stage_callback: Any = None,
     ):
         # Injectable dependencies (plan §9.1): production uses framework
         # defaults, tests inject fakes, future domains reuse everything.
+        self._stage_callback = stage_callback
         self._registry = registry or get_registry()
         # Entity resolution is a pure in-process service → safe default.
         if entity_resolution is None:
@@ -159,6 +148,8 @@ class IntelligencePipeline:
                 request.entity_ref.entity_id,
             )
 
+            await self._announce_stage(current_stage)
+
             # ── Entity resolution (hard failure) ────────────────
             request.entity_ref = await self._resolve_entity(request.entity_ref)
             stages[current_stage] = "success"
@@ -168,6 +159,7 @@ class IntelligencePipeline:
             # partial failure degrades the run, total failure of every
             # attempted provider aborts it (V3 §17.2–§17.4).
             current_stage = "ingestion"
+            await self._announce_stage(current_stage)
             observations, ingest_status, ingest_issues = await self._ingest(
                 domain, request
             )
@@ -179,6 +171,7 @@ class IntelligencePipeline:
 
             # ── Normalization ───────────────────────────────────
             current_stage = "normalization"
+            await self._announce_stage(current_stage)
             observations, norm_status, norm_issues = await self._normalize(
                 domain, observations, request.entity_ref
             )
@@ -188,6 +181,7 @@ class IntelligencePipeline:
 
             # ── Evidence (framework evidence core) ──────────────
             current_stage = "evidence"
+            await self._announce_stage(current_stage)
             evidence = await self._collect_evidence(
                 domain, observations, request.entity_ref
             )
@@ -195,20 +189,25 @@ class IntelligencePipeline:
 
             # ── RAG retrieval (optional → degraded/skipped) ─────
             current_stage = "rag"
+            await self._announce_stage(current_stage)
             rag_context = await self._retrieve_context(domain, request)
-            stages[current_stage] = "success" if rag_context else (
+            stages[current_stage] = "success" if any(rag_context.values()) else (
                 "degraded" if self._rag is not None else "skipped"
             )
 
             # ── Context construction (hard failure) ────────────
             current_stage = "context"
+            await self._announce_stage(current_stage)
             context = await self._build_context(
                 domain, request.entity_ref, evidence, observations, rag_context
             )
-            stages[current_stage] = "success"
+            stages[current_stage] = "degraded" if context.metadata.get("missing_snapshots") else "success"
+            if context.metadata.get("missing_snapshots"):
+                stage_details[current_stage] = list(context.metadata["missing_snapshots"])
 
             # ── LLM analysis (missing service → degraded) ──────
             current_stage = "llm"
+            await self._announce_stage(current_stage)
             if self._llm is None:
                 llm_output = {
                     "summary": "LLM service not configured",
@@ -222,6 +221,7 @@ class IntelligencePipeline:
 
             # ── Validation (hard failure on validator crash) ───
             current_stage = "validation"
+            await self._announce_stage(current_stage)
             if self._validation is not None:
                 llm_output = await self._validate_output(domain, llm_output, request)
                 stages[current_stage] = "success"
@@ -230,6 +230,7 @@ class IntelligencePipeline:
 
             # ── Domain scoring (hard failure) ───────────────────
             current_stage = "scoring"
+            await self._announce_stage(current_stage)
             score_result = await self._score(
                 domain, request.entity_ref, context, llm_output
             )
@@ -269,7 +270,13 @@ class IntelligencePipeline:
                     # without re-running the context stage (PLAN.md: one
                     # persisted contract across engines).
                     "domain_snapshots": dict(context.domain_snapshots),
-                    "scoring_metadata": dict(score_result.get("metadata") or {}),
+                    "context_metadata": dict(context.metadata),
+                    "rag_context": dict(context.rag_context),
+                    "llm_output": dict(llm_output),
+                    "scoring_metadata": {**dict(score_result.get("metadata") or {}),
+                                         "components": score_result.get("components", {}),
+                                         "scoring_model": score_result.get("scoring_model"),
+                                         "scoring_version": score_result.get("scoring_version")},
                 },
                 created_at=datetime.now(timezone.utc),
             )
@@ -296,6 +303,10 @@ class IntelligencePipeline:
             )
 
     # ── Step Implementations ────────────────────────────────────
+
+    async def _announce_stage(self, stage: str) -> None:
+        if self._stage_callback is not None:
+            await self._stage_callback(stage)
 
     async def _resolve_entity(self, entity_ref: EntityRef) -> EntityRef:
         """Normalize the entity identifier through the framework service.
@@ -348,7 +359,8 @@ class IntelligencePipeline:
 
         ``issues`` lists the failing provider names for result metadata.
         """
-        providers = domain.get_providers()
+        provider_factory = getattr(domain, "get_ingestion_providers", None)
+        providers = provider_factory() if callable(provider_factory) else domain.get_providers()
         all_observations: list[Observation] = []
         attempted = 0
         failed_names: list[str] = []
@@ -372,6 +384,11 @@ class IntelligencePipeline:
             try:
                 raw_data = await provider.fetch(request.entity_ref)
                 for item in raw_data:
+                    if isinstance(item, Observation):
+                        if item.entity_ref != request.entity_ref:
+                            raise ValueError("Provider returned an observation for another entity")
+                        all_observations.append(item)
+                        continue
                     all_observations.append(
                         Observation(
                             entity_ref=request.entity_ref,

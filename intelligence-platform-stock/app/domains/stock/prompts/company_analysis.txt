@@ -58,3 +58,4 @@ Analyze the company provided in the context and produce a structured investment 
 8. WHAT are the risks?
 9. WHAT could invalidate the thesis?
 10. Is it a good opportunity?
+Use evidence_passages and the source_id attached to each recent news item. Cite only passages supporting the specific factual claim. Split claims about different events into separate causes with separate citations. Omit causes with no supporting source. Treat lexical citation checks as plausibility checks, not factual verification. Attribute estimates to their publisher and publication date; describe latest_price as the recorded close on latest_date.

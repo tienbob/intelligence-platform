@@ -57,6 +57,11 @@ class StockDomain:
             "twelve_data": TwelveDataProvider(),
         }
 
+    def get_ingestion_providers(self) -> dict[str, Any]:
+        """Analysis reads worker-persisted data; it never re-fetches vendors."""
+        from app.domains.stock.providers.persisted import PersistedStockProvider
+        return {"stock_database": PersistedStockProvider()}
+
     # ── Normalizers ─────────────────────────────────────────────
 
     def get_normalizers(self) -> dict[str, Any]:

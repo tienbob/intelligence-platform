@@ -197,6 +197,19 @@ class IntelligenceTask(Protocol):
 
 
 @runtime_checkable
+class AnalysisObservationDomain(Protocol):
+    """Optional domain capability for analysis-time persisted observations."""
+
+    def get_ingestion_providers(self) -> dict[str, Any]:
+        """Optional analysis-time observation sources, distinct from vendor capabilities.
+
+        The pipeline uses this catalog when supplied, otherwise get_providers().
+        Sources may return typed Observation objects (including kind and provenance)
+        or raw dicts. Persisted domains can implement this without external fetching.
+        """
+        ...
+
+@runtime_checkable
 class DomainModule(Protocol):
     """
     The top-level contract every domain pack must implement.

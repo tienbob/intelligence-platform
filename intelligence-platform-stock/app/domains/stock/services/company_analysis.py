@@ -181,7 +181,8 @@ class CompanyAnalysisService:
                 for field in (
                     "overall_score", "risk_score", "confidence", "recommendation",
                     "fundamental_score", "valuation_score", "growth_score",
-                    "data_quality_score",
+                    "data_quality_score", "technical_score", "sentiment_score",
+                    "catalyst_score", "scoring_model", "scoring_version", "validation_issues",
                 )
             },
         }
@@ -373,13 +374,13 @@ def assert_completed_analysis_contract(analysis: Any) -> None:
 _framework_pipeline_factory = None  # set lazily; see _build_framework_pipeline
 
 
-def _build_framework_pipeline():
+def _build_framework_pipeline(**overrides):
     global _framework_pipeline_factory
     if _framework_pipeline_factory is None:
         from app.domains.stock.pipeline_factory import build_stock_pipeline
 
         _framework_pipeline_factory = build_stock_pipeline
-    return _framework_pipeline_factory()
+    return _framework_pipeline_factory(**overrides)
 
 
 async def _load_run_score(session: AsyncSession, company_id: int, score_id: int) -> Any:
@@ -413,7 +414,12 @@ async def _execute_framework(
     await stage("calculating_metrics")
     started = time.monotonic()
 
-    pipeline = _build_framework_pipeline()
+    async def pipeline_stage(name: str) -> None:
+        labels = {"context": "retrieving_context", "llm": "llm_analysis", "scoring": "risk_analysis"}
+        if name in labels:
+            await stage(labels[name])
+
+    pipeline = _build_framework_pipeline(stage_callback=pipeline_stage)
     request = AnalysisRequest(
         entity_ref=EntityRef("stock", "company", company.ticker),
         analysis_type="company",
@@ -436,35 +442,36 @@ async def _execute_framework(
         )
 
     meta_src = result.metadata or {}
-    llm_output = {
-        "summary": result.summary,
-        "insights": result.insights,
-        "risks": result.risks,
-        "confidence": result.confidence,
-        "recommendation": result.recommendation,
-        "evidence": {
-            "evidence_sources": [
-                {
-                    "source_type": e.source_type,
-                    "source_name": e.source_name,
-                    "metric": e.metric,
-                    "value": e.value,
-                    "period": e.period,
-                }
-                for e in result.evidence
-            ],
-            "source_count": len(result.evidence),
-        },
-        "_meta": {
-            "model": meta_src.get("llm_model"),
-            "provider": meta_src.get("llm_provider"),
-            "prompt_name": meta_src.get("prompt_name"),
-            "prompt_version": meta_src.get("prompt_version"),
-            "analysis_type": meta_src.get("analysis_type"),
-            "tokens_used": meta_src.get("llm_tokens"),
-        },
-    }
-
+    llm_output = dict(meta_src.get("llm_output") or {})
+    if not llm_output:
+        llm_output = {
+            "summary": result.summary,
+            "insights": result.insights,
+            "risks": result.risks,
+            "confidence": result.confidence,
+            "recommendation": result.recommendation,
+            "evidence": {
+                "evidence_sources": [
+                    {
+                        "source_type": e.source_type,
+                        "source_name": e.source_name,
+                        "metric": e.metric,
+                        "value": e.value,
+                        "period": e.period,
+                    }
+                    for e in result.evidence
+                ],
+                "source_count": len(result.evidence),
+            },
+            "_meta": {
+                "model": meta_src.get("llm_model"),
+                "provider": meta_src.get("llm_provider"),
+                "prompt_name": meta_src.get("prompt_name"),
+                "prompt_version": meta_src.get("prompt_version"),
+                "analysis_type": meta_src.get("analysis_type"),
+                "tokens_used": meta_src.get("llm_tokens"),
+            },
+        }
     # Persist through the SAME canonical writer so storage shape can never
     # drift between engines (PLAN.md: one persisted contract). Only the
     # persistence stage is reused; context/LLM stages belong to the pipeline.
@@ -477,10 +484,11 @@ async def _execute_framework(
         context={
             "entity": {"id": company.ticker},
             **snapshots,
+            "rag_context": meta_src.get("rag_context", {}),
         },
         llm_output=llm_output,
         score=score,
-        evidence_package=llm_output["evidence"],
+        evidence_package=llm_output.get("evidence", {}),
         duration_seconds=round(time.monotonic() - started, 3),
         existing=existing,
     )
@@ -488,8 +496,8 @@ async def _execute_framework(
         analysis=analysis,
         score=score,
         llm_output=llm_output,
-        context={},
-        evidence_package=llm_output["evidence"],
+        context={**snapshots, "rag_context": meta_src.get("rag_context", {})},
+        evidence_package=llm_output.get("evidence", {}),
     )
 
 
