@@ -94,7 +94,7 @@ class StockContextBuilder:
     def _build_market_snapshot(observations: list[Observation]) -> dict[str, Any]:
         """Build market data snapshot from observations."""
         # TODO: Migrate from original ContextBuilder.build_market_snapshot()
-        price_obs = [o for o in observations if o.source in ("fmp", "massive")]
+        price_obs = [o for o in observations if o.source in ("fmp", "massive", "twelve_data", "finnhub")]
         if not price_obs:
             return {}
         latest = price_obs[-1].data if price_obs else {}

@@ -43,6 +43,7 @@ class FundamentalAnalysisEngine:
         result = await self.session.execute(
             select(FinancialStatement)
             .where(FinancialStatement.company_id == company_id)
+            .where(FinancialStatement.period_type == "quarterly")
             .order_by(desc(FinancialStatement.period))
             .limit(limit)
         )

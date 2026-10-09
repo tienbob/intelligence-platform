@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.stock_price import StockPrice
-from app.domains.stock.providers import MassiveProvider, ProviderError
+from app.domains.stock.providers import FinnhubProvider, ProviderError
 from app.domains.stock.schemas.stock import StockPriceHistory, StockPricePoint, StockQuote
 from app.domains.stock.services.company_resolution import (
     get_or_schedule_missing,
@@ -47,9 +47,11 @@ async def get_stock_quote(ticker: str, db: AsyncSession = Depends(get_db)):
     if not prices:
         # Fallback to provider
         try:
-            provider = MassiveProvider()
-            quote = await provider.get_quote(ticker)
-            await provider.close()
+            provider = FinnhubProvider()
+            try:
+                quote = await provider.get_quote(ticker)
+            finally:
+                await provider.close()
             return StockQuote(
                 ticker=ticker.upper(),
                 name=company.name,

@@ -20,7 +20,8 @@ from app.core.logging import get_logger
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.raw import RawMarketData
 from app.domains.stock.models.stock_price import StockPrice
-from app.domains.stock.providers import MassiveProvider, ProviderError
+from app.domains.stock.providers import TwelveDataProvider, ProviderError
+from app.domains.stock.providers.base import MarketDataProvider
 from app.domains.stock.providers.base import RateLimitError
 from app.domains.stock.providers.fmp import FMPProvider
 from app.domains.stock.normalization.companies import EntityResolver
@@ -51,13 +52,18 @@ class MarketDataIngestion:
     def __init__(
         self,
         session: AsyncSession,
-        provider: MassiveProvider | FMPProvider | None = None,
-        fallback: MassiveProvider | FMPProvider | None = None,
+        provider: MarketDataProvider | None = None,
+        fallback: MarketDataProvider | None = None,
     ):
         self.session = session
-        self._primary = provider or MassiveProvider()
+        self._primary = provider or TwelveDataProvider()
         self._fallback = fallback
         self._entity_resolver = EntityResolver(session)
+
+    async def close(self) -> None:
+        await self._primary.close()
+        if self._fallback is not None and self._fallback is not self._primary:
+            await self._fallback.close()
 
     @property
     def provider(self):
@@ -490,8 +496,11 @@ class MarketDataIngestion:
     ) -> int:
         """Convenience method to ingest recent daily prices."""
 
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days)
+        # Completed daily bars: stable bounds make repeated scheduler runs
+        # share a cached response instead of spending new credits every five minutes.
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = today - timedelta(seconds=1)
+        start_date = today - timedelta(days=days)
 
         return await self.ingest_historical_prices(
             ticker,

@@ -13,7 +13,7 @@ Provides:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.domains.stock.config import get_stock_config
@@ -43,7 +43,7 @@ class FinnhubProvider(
 
     provider_name = "finnhub"
     base_url = settings.FINNHUB_BASE_URL
-    rate_limit_per_sec = 10
+    rate_limit_per_sec = 1
 
     def __init__(self, api_key: str | None = None):
         super().__init__(api_key or settings.FINNHUB_API_KEY)
@@ -53,6 +53,9 @@ class FinnhubProvider(
         if self.api_key:
             params["token"] = self.api_key
         return params
+
+    async def get_company_profile(self, ticker: str) -> dict[str, Any]:
+        return await self._request("GET", "/stock/profile2", params=self._build_params(symbol=ticker))
 
     # ── AlternativeDataProvider ──────────────────────────────────
 
@@ -131,7 +134,10 @@ class FinnhubProvider(
             params=self._build_params(category="general"),
         )
         # /news returns a dict with "news" key containing the list
-        return self._parse_news(data.get("news", [])[:limit])
+        items = data if isinstance(data, list) else data.get("news", [])
+        if query:
+            items = [r for r in items if query.lower() in (r.get("headline", "") + " " + r.get("summary", "")).lower()]
+        return self._parse_news(items[:limit])
 
     async def get_company_news(
         self, ticker: str, limit: int = 50
@@ -142,7 +148,10 @@ class FinnhubProvider(
             "/company-news",
             params=self._build_params(
                 symbol=ticker,
-                **({"from": datetime.now(timezone.utc).strftime("%Y-%m-%d")} if not False else {}),
+                **{
+                    "from": (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d"),
+                    "to": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                },
             ),
         )
         # /company-news returns a list directly, but handle both formats
@@ -160,7 +169,7 @@ class FinnhubProvider(
                 "published_at": r.get("datetime"),
                 "summary": r.get("summary"),
                 "content": r.get("summary"),
-                "tickers": [r.get("related", "")] if r.get("related") else [],
+                "tickers": [t.strip() for t in r.get("related", "").split(",") if t.strip()],
                 "sentiment": r.get("sentiment"),
             }
             for r in results

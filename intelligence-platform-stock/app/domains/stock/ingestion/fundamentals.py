@@ -330,17 +330,17 @@ class FundamentalsIngestion:
             # separate endpoints.
             # ----------------------------------------------------------
 
-            income_statements = (
-                await self.fmp.get_income_statement(ticker)
-            )
-
-            balance_statements = (
-                await self.fmp.get_balance_sheet(ticker)
-            )
-
-            cashflow_statements = (
-                await self.fmp.get_cash_flow(ticker)
-            )
+            statement_source = "SEC"
+            try:
+                statements = await self.sec.get_normalized_statements(ticker)
+                if not statements:
+                    raise ProviderError("sec", "No normalized USD statements")
+                income_statements = balance_statements = cashflow_statements = statements
+            except ProviderError:
+                statement_source = "FMP"
+                income_statements = await self.fmp.get_income_statement(ticker)
+                balance_statements = await self.fmp.get_balance_sheet(ticker)
+                cashflow_statements = await self.fmp.get_cash_flow(ticker)
 
             # ----------------------------------------------------------
             # Index each statement family by reporting period.
@@ -354,19 +354,19 @@ class FundamentalsIngestion:
             # ----------------------------------------------------------
 
             income_by_period: dict[str, dict[str, Any]] = {
-                stmt["period"]: stmt
+                (stmt["period"], stmt.get("period_type", "annual")): stmt
                 for stmt in income_statements
                 if stmt.get("period")
             }
 
             balance_by_period: dict[str, dict[str, Any]] = {
-                stmt["period"]: stmt
+                (stmt["period"], stmt.get("period_type", "annual")): stmt
                 for stmt in balance_statements
                 if stmt.get("period")
             }
 
             cashflow_by_period: dict[str, dict[str, Any]] = {
-                stmt["period"]: stmt
+                (stmt["period"], stmt.get("period_type", "annual")): stmt
                 for stmt in cashflow_statements
                 if stmt.get("period")
             }
@@ -386,10 +386,11 @@ class FundamentalsIngestion:
 
             count = 0
 
-            for period in sorted(periods):
-                income = income_by_period.get(period)
-                balance = balance_by_period.get(period)
-                cashflow = cashflow_by_period.get(period)
+            for period_key in sorted(periods):
+                period = period_key[0]
+                income = income_by_period.get(period_key)
+                balance = balance_by_period.get(period_key)
+                cashflow = cashflow_by_period.get(period_key)
 
                 merged = self._merge_statement_period(
                     income=income,
@@ -419,7 +420,7 @@ class FundamentalsIngestion:
                     ],
                     "total_debt": merged["total_debt"],
                     "cash": merged["cash"],
-                    "source": "FMP",
+                    "source": statement_source,
                 }
 
                 validation_result = validate_financial_statement(
@@ -493,7 +494,7 @@ class FundamentalsIngestion:
 
                     # Metadata
                     "filing_date": filing_date,
-                    "source": "FMP",
+                    "source": statement_source,
                     "source_id": merged["source_id"],
                     "retrieved_at": retrieved_at,
                     "published_at": published_at,
@@ -515,6 +516,7 @@ class FundamentalsIngestion:
                         index_elements=[
                             "company_id",
                             "period",
+                            "period_type",
                         ]
                     )
                 )
@@ -644,9 +646,10 @@ class FundamentalsIngestion:
         """
 
         try:
-            profile = await self.fmp.get_company_profile(
-                ticker
-            )
+            try:
+                profile = await self.fmp.get_company_profile(ticker)
+            except ProviderError:
+                profile = {}
 
             company = await self._get_company(ticker)
 
@@ -669,52 +672,20 @@ class FundamentalsIngestion:
                 company.website = profile.get("website") or company.website
                 company.cik = profile.get("cik") or company.cik
 
-            # Fallback: Massive ticker details carry `market_cap` (and
-            # name/exchange) even when FMP profile is missing/blocked —
-            # notably for ETFs like SPY where FMP profile can be empty.
+            # Finnhub profile uses market capitalization in millions of USD.
             if not company.market_cap:
+                from app.domains.stock.providers import FinnhubProvider
+                provider = FinnhubProvider()
                 try:
-                    from app.domains.stock.providers import MassiveProvider
-
-                    massive = MassiveProvider()
-                    try:
-                        details = await massive.get_ticker_details(ticker)
-                    finally:
-                        await massive.close()
-                    if details:
-                        if not company.name or company.name == ticker.upper():
-                            company.name = details.get("name") or company.name
-                        if not company.exchange and details.get("primary_exchange"):
-                            company.exchange = details.get("primary_exchange")
-                        if not company.market_cap and details.get("market_cap"):
-                            try:
-                                company.market_cap = float(details.get("market_cap"))
-                            except (TypeError, ValueError):
-                                company.market_cap = None
-                        # Compute from price × weighted shares if still missing.
-                        if (
-                            not company.market_cap
-                            and details.get("weighted_shares_outstanding")
-                        ):
-                            try:
-                                shares = float(
-                                    details.get("weighted_shares_outstanding")
-                                )
-                                price_detail = details.get("price") or details.get(
-                                    "last_trade_price"
-                                )
-                                price_val = (
-                                    float(price_detail) if price_detail else None
-                                )
-                                if price_val:
-                                    company.market_cap = price_val * shares
-                            except (TypeError, ValueError):
-                                pass
-                except Exception:
-                    logger.warning(
-                        "Massive ticker-details fallback failed for %s",
-                        ticker,
-                    )
+                    details = await provider.get_company_profile(ticker)
+                    if details.get("marketCapitalization"):
+                        company.market_cap = float(details["marketCapitalization"]) * 1_000_000
+                    company.exchange = company.exchange or details.get("exchange")
+                    company.name = details.get("name") or company.name
+                except ProviderError:
+                    logger.warning("Finnhub profile fallback failed for %s", ticker)
+                finally:
+                    await provider.close()
 
             await self.session.commit()
 

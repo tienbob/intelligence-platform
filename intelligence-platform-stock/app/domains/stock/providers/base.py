@@ -208,6 +208,9 @@ class BaseProvider(ABC):
         """Override in subclasses to inject API keys into query params."""
         return {k: v for k, v in kwargs.items() if v is not None}
 
+    def _validate_response(self, result: Any) -> None:
+        """Provider hook: reject API-level errors before caching a response."""
+
     async def _request(
         self,
         method: str,
@@ -236,10 +239,11 @@ class BaseProvider(ABC):
         if use_cache and method == "GET":
             import hashlib
             cache_key = hashlib.md5(
-                f"{method}:{endpoint}:{sorted((params or {}).items())}".encode()
+                f"v2:{self.provider_name}:{self.base_url}:{method}:{endpoint}:{sorted((params or {}).items())}".encode()
             ).hexdigest()
             cached = await self._cache.get(cache_key)
             if cached is not None:
+                self._validate_response(cached)
                 logger.debug("Cache hit for %s %s", method, endpoint)
                 return cached
 
@@ -273,6 +277,7 @@ class BaseProvider(ABC):
 
                 self._circuit_breaker.record_success()
                 result = response.json()
+                self._validate_response(result)
 
                 # Cache successful GET responses (issue #9)
                 if cache_key:
@@ -304,6 +309,13 @@ class BaseProvider(ABC):
 
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
                 last_error = exc
+                # TLS failures can have an empty message. Preserve the
+                # underlying exception so connection diagnostics stay useful.
+                details = repr(exc)
+                cause = exc.__cause__
+                while cause is not None:
+                    details += f" caused by {cause!r}"
+                    cause = cause.__cause__
                 if attempt < max_retries:
                     backoff = 2 ** attempt
                     logger.warning(
@@ -312,7 +324,7 @@ class BaseProvider(ABC):
                         backoff,
                         attempt + 1,
                         max_retries,
-                        str(exc),
+                        details,
                     )
                     # Reset the client on connection errors so a corrupted
                     # connection pool doesn't poison all retries.
@@ -322,7 +334,10 @@ class BaseProvider(ABC):
                     await asyncio.sleep(backoff)
                     continue
                 self._circuit_breaker.record_failure()
-                raise ProviderError(self.provider_name, f"Connection error: {exc}") from exc
+                raise ProviderError(
+                    self.provider_name,
+                    f"Connection error contacting {self.base_url}: {details}",
+                ) from exc
 
         self._circuit_breaker.record_failure()
         raise ProviderError(
@@ -333,7 +348,7 @@ class BaseProvider(ABC):
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
-        await self._cache.clear()
+        # Closing a client must preserve cached data shared by other workers.
 
     def _normalize_timestamp(self, value: Any) -> datetime | None:
       """Normalize common timestamp formats into a timezone-aware UTC datetime.

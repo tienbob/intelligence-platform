@@ -6,7 +6,7 @@ chains so the application never directly depends on one provider.
 
 Section 60 — No Single Provider Dependency:
     The application should remain functional if one provider fails.
-    Massive unavailable → Fallback market provider → Continue
+    Twelve Data unavailable → Fallback market provider → Continue
     But record: data_source = fallback, and reduce confidence if appropriate.
 
 Architecture (Section 6):
@@ -35,7 +35,7 @@ from app.domains.stock.providers.base import (
 from app.domains.stock.providers.finnhub import FinnhubProvider
 from app.domains.stock.providers.fmp import FMPProvider
 from app.domains.stock.providers.fred import FREDProvider
-from app.domains.stock.providers.massive import MassiveProvider
+from app.domains.stock.providers.twelve_data import TwelveDataProvider
 from app.domains.stock.providers.sec import SECProvider
 
 logger = get_logger(__name__)
@@ -45,23 +45,23 @@ T = TypeVar("T")
 # Capability → list of provider classes in priority order (highest first)
 # Section 60: Primary source → Official source → Verified provider → Secondary provider
 DEFAULT_PROVIDER_CHAINS: dict[type, list[type]] = {
-    MarketDataProvider: [MassiveProvider, FMPProvider, FinnhubProvider],
-    FundamentalDataProvider: [FMPProvider, SECProvider, MassiveProvider],
-    NewsProvider: [MassiveProvider, FinnhubProvider],
+    MarketDataProvider: [TwelveDataProvider, FMPProvider, FinnhubProvider],
+    FundamentalDataProvider: [SECProvider, FMPProvider],
+    NewsProvider: [FinnhubProvider],
     MacroDataProvider: [FREDProvider],
     AlternativeDataProvider: [FinnhubProvider],
 }
 
 # Method-specific fallback chains (issue #8)
 METHOD_FALLBACK_CHAINS: dict[tuple[type, str], list[type]] = {
-    (MarketDataProvider, "get_quote"): [MassiveProvider, FMPProvider, FinnhubProvider],
-    (MarketDataProvider, "get_historical_prices"): [MassiveProvider, FMPProvider, FinnhubProvider],
-    (MarketDataProvider, "get_market_movers"): [MassiveProvider, FMPProvider],
-    (FundamentalDataProvider, "get_income_statement"): [FMPProvider, SECProvider, MassiveProvider],
-    (FundamentalDataProvider, "get_balance_sheet"): [FMPProvider, SECProvider, MassiveProvider],
-    (FundamentalDataProvider, "get_cash_flow"): [FMPProvider, SECProvider, MassiveProvider],
-    (NewsProvider, "search_news"): [MassiveProvider, FinnhubProvider],
-    (NewsProvider, "get_company_news"): [MassiveProvider, FinnhubProvider],
+    (MarketDataProvider, "get_quote"): [FinnhubProvider, TwelveDataProvider, FMPProvider],
+    (MarketDataProvider, "get_historical_prices"): [TwelveDataProvider, FMPProvider],
+    (MarketDataProvider, "get_market_movers"): [FMPProvider],
+    (FundamentalDataProvider, "get_income_statement"): [SECProvider, FMPProvider],
+    (FundamentalDataProvider, "get_balance_sheet"): [SECProvider, FMPProvider],
+    (FundamentalDataProvider, "get_cash_flow"): [SECProvider, FMPProvider],
+    (NewsProvider, "search_news"): [FinnhubProvider],
+    (NewsProvider, "get_company_news"): [FinnhubProvider],
 }
 
 
@@ -105,7 +105,7 @@ class ProviderFactory:
         provider = await factory.get(MarketDataProvider)
 
         # Resolve a call across the provider chain (section 60):
-        # tries Massive, falls back to FMP, then Finnhub.
+        # tries Finnhub for quotes, then Twelve Data and FMP.
         result = await factory.execute(MarketDataProvider, "get_quote", "AAPL")
     """
 

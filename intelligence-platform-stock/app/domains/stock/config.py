@@ -25,6 +25,11 @@ class StockConfig(BaseSettings):
         extra="ignore",
     )
 
+    TWELVE_DATA_API_KEY: Optional[str] = None
+    TWELVE_DATA_BASE_URL: str = "https://api.twelvedata.com"
+    TWELVE_DATA_CREDITS_PER_MINUTE: int = Field(default=8, ge=1, le=8)
+    TWELVE_DATA_CREDITS_PER_DAY: int = Field(default=800, ge=1, le=800)
+
     # ── Provider API Keys ────────────────────────────────────────
     MASSIVE_API_KEY: Optional[str] = None
     MASSIVE_BASE_URL: str = "https://api.massive.com"

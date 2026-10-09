@@ -45,7 +45,7 @@ class StockDomain:
             FMPProvider,
             FinnhubProvider,
             FREDProvider,
-            MassiveProvider,
+            TwelveDataProvider,
             SECProvider,
         )
 
@@ -54,7 +54,7 @@ class StockDomain:
             "finnhub": FinnhubProvider(),
             "fred": FREDProvider(),
             "sec": SECProvider(),
-            "massive": MassiveProvider(),
+            "twelve_data": TwelveDataProvider(),
         }
 
     # ── Normalizers ─────────────────────────────────────────────
