@@ -35,6 +35,7 @@ from app.domains.stock.providers.factory import (
 from app.domains.stock.providers.finnhub import FinnhubProvider
 from app.domains.stock.providers.fmp import FMPProvider
 from app.domains.stock.providers.fred import FREDProvider
+from app.domains.stock.providers.twelve_data import TwelveDataProvider
 from app.domains.stock.providers.massive import MassiveProvider
 from app.domains.stock.providers.normalized import (
     NormalizedEconomicIndicator,
@@ -58,6 +59,7 @@ __all__ = [
     "MacroDataProvider",
     "AlternativeDataProvider",
     # Concrete providers
+    "TwelveDataProvider",
     "MassiveProvider",
     "SECProvider",
     "FREDProvider",

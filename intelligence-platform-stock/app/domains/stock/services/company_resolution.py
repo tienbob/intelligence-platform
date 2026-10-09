@@ -141,10 +141,15 @@ async def ingest_missing_ticker(
     from app.domains.stock.ingestion.fundamentals import FundamentalsIngestion
     from app.domains.stock.ingestion.market import MarketDataIngestion
     from app.domains.stock.ingestion.news import NewsIngestion
+    from app.domains.stock.config import get_stock_config
+    from app.domains.stock.providers.fmp import FMPProvider
 
     try:
         # 1. Ingest historical prices (creates the company record)
-        market = MarketDataIngestion(db)
+        market = MarketDataIngestion(
+            db,
+            fallback=FMPProvider() if get_stock_config().FMP_API_KEY else None,
+        )
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=365)
         await market.ingest_historical_prices(ticker, start, end, "1d")

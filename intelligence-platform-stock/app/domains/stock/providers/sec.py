@@ -17,7 +17,7 @@ from typing import Any
 
 from app.domains.stock.config import get_stock_config
 from app.core.logging import get_logger
-from app.domains.stock.providers.base import FundamentalDataProvider
+from app.domains.stock.providers.base import FundamentalDataProvider, ProviderError
 
 logger = get_logger(__name__)
 settings = get_stock_config()
@@ -69,12 +69,15 @@ class SECProvider(FundamentalDataProvider):
         # SEC provides a company tickers JSON at /files/company/tickers.json
         import httpx
         client = await self._get_client()
-        response = await client.get(
-            f"{self.base_url}/files/company/tickers.json",
-            headers=self._get_headers(),
-        )
-        response.raise_for_status()
-        tickers_data = response.json()
+        try:
+            response = await client.get(
+                "https://www.sec.gov/files/company_tickers.json",
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            tickers_data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProviderError(self.provider_name, "Unable to resolve SEC ticker index") from exc
         
         # Find matching ticker (case-insensitive)
         cik = None
@@ -276,3 +279,49 @@ class SECProvider(FundamentalDataProvider):
                                 })
                     break
         return results
+    async def get_normalized_statements(self, ticker: str) -> list[dict[str, Any]]:
+        """Canonical USD statements; omit YTD durations rather than label them quarters."""
+        cik = await self._resolve_ticker_to_cik(ticker)
+        facts = await self.get_company_facts(cik)
+        return self.normalize_statements(facts)
+
+    @staticmethod
+    def normalize_statements(facts: dict[str, Any]) -> list[dict[str, Any]]:
+        concepts = {
+            'revenue': ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues'],
+            'gross_profit': ['GrossProfit'], 'operating_income': ['OperatingIncomeLoss'],
+            'net_income': ['NetIncomeLoss'], 'eps': ['EarningsPerShareBasic'],
+            'total_assets': ['Assets'], 'total_liabilities': ['Liabilities'],
+            'total_debt': ['DebtLongtermAndShorttermCombined', 'LongTermDebt'],
+            'cash': ['CashAndCashEquivalentsAtCarryingValue'],
+            'shareholders_equity': ['StockholdersEquity'],
+            'operating_cash_flow': ['NetCashProvidedByUsedInOperatingActivities'],
+            'capital_expenditure': ['PaymentsToAcquirePropertyPlantAndEquipment'],
+        }
+        gaap = facts.get('facts', {}).get('us-gaap', {})
+        durations, instants = {}, {}
+        for field, aliases in concepts.items():
+            unit = 'USD/shares' if field == 'eps' else 'USD'
+            points = next((gaap[a].get('units', {}).get(unit, []) for a in aliases if gaap.get(a, {}).get('units', {}).get(unit)), [])
+            for point in sorted(points, key=lambda p: p.get('filed', '')):
+                if point.get('form') not in ('10-K', '10-Q') or not point.get('end'):
+                    continue
+                end = point['end']
+                if not point.get('start'):
+                    instants.setdefault(end, {})[field] = point.get('val')
+                    continue
+                days = (datetime.fromisoformat(end) - datetime.fromisoformat(point['start'])).days
+                kind = 'quarterly' if 70 <= days <= 110 else 'annual' if 330 <= days <= 380 else None
+                if kind is None:
+                    continue
+                row = durations.setdefault((end, kind), {'period': end, 'period_type': kind, 'currency': 'USD', 'source': 'SEC'})
+                row[field] = point.get('val')
+                row['filed_date'] = max(row.get('filed_date', ''), point.get('filed', ''))
+                row['source_id'] = point.get('accn')
+        for (end, kind), row in durations.items():
+            row.update(instants.get(end, {}))
+            if row.get('capital_expenditure') is not None:
+                row['capital_expenditure'] = -abs(row['capital_expenditure'])
+            if row.get('operating_cash_flow') is not None and row.get('capital_expenditure') is not None:
+                row['free_cash_flow'] = row['operating_cash_flow'] + row['capital_expenditure']
+        return sorted(durations.values(), key=lambda r: (r['period'], r['period_type']))

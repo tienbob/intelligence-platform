@@ -84,12 +84,12 @@ def test_stock_adapters_satisfy_declared_protocols():
 
     providers = build_capability_providers()
 
-    massive = providers["massive"]
-    assert isinstance(massive, CapabilityProvider)          # has health_check
-    assert isinstance(massive, EntityDataProvider)
-    assert isinstance(massive, TimeSeriesProvider)
-    assert isinstance(massive, NewsProvider)
-    assert has_capability(massive, "news")
+    twelve_data = providers["twelve_data"]
+    assert isinstance(twelve_data, CapabilityProvider)
+    assert isinstance(twelve_data, TimeSeriesProvider)
+    assert has_capability(twelve_data, "time_series")
+    assert not has_capability(twelve_data, "news")
+    assert not has_capability(twelve_data, "entity_data")
 
     fmp = providers["fmp"]
     assert isinstance(fmp, CapabilityProvider)

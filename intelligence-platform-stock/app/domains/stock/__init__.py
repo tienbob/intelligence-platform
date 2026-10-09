@@ -17,6 +17,7 @@ register_source_reliability({
     "company_ir": 0.95,
     "major_financial_news": 0.90,
     "fmp": 0.90,
+    "twelve_data": 0.85,
     "massive": 0.85,
     "finnhub": 0.80,
 })

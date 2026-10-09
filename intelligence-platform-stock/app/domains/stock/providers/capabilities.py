@@ -32,7 +32,7 @@ from app.domains.stock.providers.base import ProviderError
 from app.domains.stock.providers.finnhub import FinnhubProvider
 from app.domains.stock.providers.fmp import FMPProvider
 from app.domains.stock.providers.fred import FREDProvider
-from app.domains.stock.providers.massive import MassiveProvider
+from app.domains.stock.providers.twelve_data import TwelveDataProvider
 from app.domains.stock.providers.sec import SECProvider
 from app.shared.entities import EntityRef
 
@@ -131,13 +131,13 @@ class CapabilityAdapter:
 
     async def search_news(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
         self._require("search_news")
-        return await self.vendor.search_news(query, **kwargs.get("limit", 50))
+        return await self.vendor.search_news(query, limit=kwargs.get("limit", 50))
 
     async def get_company_news(
         self, ticker: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
         self._require("get_company_news")
-        return await self.vendor.get_company_news(ticker, **kwargs.get("limit", 50))
+        return await self.vendor.get_company_news(ticker, limit=kwargs.get("limit", 50))
 
 
 # ── Per-vendor adapters ─────────────────────────────────────────
@@ -147,6 +147,10 @@ class MassiveCapabilities(CapabilityAdapter):
     framework_capabilities: frozenset[str] = frozenset(
         {"entity_data", "time_series", "news"}
     )
+
+
+class TwelveDataCapabilities(CapabilityAdapter):
+    framework_capabilities: frozenset[str] = frozenset({"time_series"})
 
 
 class FMPCapabilities(CapabilityAdapter):
@@ -187,7 +191,7 @@ class FREDCapabilities(CapabilityAdapter):
 # ── Catalog + builder ───────────────────────────────────────────
 
 STOCK_CAPABILITY_CATALOG: dict[str, tuple[type, type]] = {
-    "massive": (MassiveProvider, MassiveCapabilities),
+    "twelve_data": (TwelveDataProvider, TwelveDataCapabilities),
     "fmp": (FMPProvider, FMPCapabilities),
     "finnhub": (FinnhubProvider, FinnhubCapabilities),
     "sec": (SECProvider, SECCapabilities),

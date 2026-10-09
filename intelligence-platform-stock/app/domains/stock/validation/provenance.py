@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 SOURCE_PRIORITY = {
     "sec": 1,        # Official source — highest priority
     "fred": 1,       # Official source — highest priority
+    "twelve_data": 2,
     "massive": 2,    # Verified provider
     "fmp": 3,        # Verified provider
     "finnhub": 4,    # Secondary provider

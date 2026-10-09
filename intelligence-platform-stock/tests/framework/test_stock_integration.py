@@ -33,7 +33,7 @@ def _domain():
 
 def test_manifest_providers_are_real_objects():
     providers = _domain().get_providers()
-    assert set(providers) == {"fmp", "finnhub", "fred", "sec", "massive"}
+    assert set(providers) == {"fmp", "finnhub", "fred", "sec", "twelve_data"}
     for name, provider in providers.items():
         assert provider is not None, f"provider '{name}' is None"
 

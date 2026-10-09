@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -50,11 +50,12 @@ class FinancialStatement(Base, TimestampMixin, ProvenanceMixin):
     free_cash_flow: Mapped[float | None] = mapped_column(Float)
 
     __table_args__ = (
+        UniqueConstraint("company_id", "period", "period_type", name="uq_financial_statements_company_period_type"),
         Index(
             "ix_financial_statements_company_period",
             "company_id",
             "period",
-            unique=True,
+
         ),
     )
 

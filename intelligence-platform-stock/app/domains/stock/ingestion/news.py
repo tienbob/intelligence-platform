@@ -26,7 +26,7 @@ from app.domains.stock.normalization.companies import (
     EntityResolver,
     normalize_company_name,
 )
-from app.domains.stock.providers import MassiveProvider, NewsProvider, ProviderError
+from app.domains.stock.providers import FinnhubProvider, NewsProvider, ProviderError
 from app.domains.stock.scoring.sentiment import SentimentAnalyzer
 from app.domains.stock.validation.duplicates import compute_news_hash
 from app.domains.stock.validation.schema import validate_news
@@ -44,7 +44,7 @@ class NewsIngestion:
         provider: NewsProvider | None = None,
     ):
         self.session = session
-        self.provider = provider or MassiveProvider()
+        self.provider = provider or FinnhubProvider()
         self._resolver = EntityResolver(session)
         self._sentiment = SentimentAnalyzer()
 
