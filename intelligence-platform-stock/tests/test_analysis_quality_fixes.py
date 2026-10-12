@@ -92,3 +92,29 @@ def test_multiple_passages_can_jointly_support_a_cause():
         {'id':628,'content':"Tesla's Forward P/E ratio of 210.49 significantly exceeds the industry average of 15.63. It carries a Zacks Rank #4 (Sell), suggesting valuation concerns."}]})
     cause = dict(cause='Downward revisions in earnings estimates and concerns over an extremely high forward P/E ratio (exceeding 150x) leading to a Zacks Rank #4 (Sell).', evidence_ids=['news_606','news_628'])
     assert attributor.filter_supported_evidence_ids(cause) == ['news_606','news_628']
+
+
+def test_framework_and_legacy_company_prompt_versions_match():
+    assert LLMService.get_prompt_version('stock_company') == LLMService.get_prompt_version('company_analysis') == '1.1'
+
+
+@pytest.mark.asyncio
+async def test_stock_prompt_has_one_copy_of_each_passage_and_preserves_inputs():
+    from app.domains.stock.manifest import StockDomain
+    passage = 'Tesla added 150 Cybercab registrations in Texas, lifting the total to 319 from 169.'
+    context = {'observations': [{'data': {'summary': passage}}], 'evidence': [{'value': passage}],
+               'rag_context': {'news': [{'id': 42, 'content': passage}]},
+               'news_snapshot': {'recent_news': [{'id': 7, 'title': 'Latest news', 'summary': 'Unique snapshot article body'}]}}
+    context = StockDomain().get_llm_context(context)
+    result = dict(summary='Summary', market_interpretation='Interpretation', bull_case=[], bear_case=[],
+                  investment_thesis='Thesis', confidence=.75, causes=[])
+    engine = SimpleNamespace(chat_json=AsyncMock(return_value=(result, 5)), build_meta=lambda **kw: kw)
+    service = LLMService(api_key='test');service._get_client = AsyncMock();service._get_engine = lambda: engine
+    attributor = StockDomain().get_evidence_attributor(context)
+    await service.analyze('prompt', context, evidence_attributor=attributor)
+    message = engine.chat_json.call_args.args[1]
+    assert message.count(passage) == 1
+    assert message.count('Unique snapshot article body') == 1
+    assert 'observations' not in context and 'evidence' not in context
+    assert context['rag_context']['news'][0]['content'] == passage
+    assert context['news_snapshot']['recent_news'][0]['summary'] == 'Unique snapshot article body'

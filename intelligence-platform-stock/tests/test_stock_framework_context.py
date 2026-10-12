@@ -98,3 +98,16 @@ def test_rag_adapter_filters_to_resolved_company(monkeypatch):
     result = asyncio.run(StockRAGPipelineAdapter().retrieve_context('arbitrary query', entity_id='AAPL'))
     assert result == {'news': []}
     retriever.retrieve_context.assert_awaited_once_with('Analysis of AAPL Apple Inc.', company_id=7)
+
+
+def test_metadata_only_financial_statement_is_degraded():
+    context = asyncio.run(StockContextBuilder().build(REF, [], [observation(
+        'fundamental_snapshot', {'metrics': {}, 'latest_statement': {
+            'period': '2026-06-30', 'source': 'SEC', 'revenue': None, 'net_income': None}})], {}))
+    assert 'fundamental_snapshot' in context.metadata['missing_snapshots']
+
+
+def test_zero_financial_value_counts_as_available():
+    context = asyncio.run(StockContextBuilder().build(REF, [], [observation(
+        'fundamental_snapshot', {'metrics': {'net_margin': 0}, 'latest_statement': {}})], {}))
+    assert 'fundamental_snapshot' not in context.metadata['missing_snapshots']

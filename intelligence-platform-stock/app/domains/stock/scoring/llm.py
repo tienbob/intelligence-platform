@@ -109,7 +109,8 @@ class LLMService:
     @staticmethod
     def get_prompt_version(prompt_name: str) -> str:
         """Get version for a prompt template."""
-        return PROMPT_VERSIONS.get(prompt_name, "1.0")
+        canonical = "company_analysis" if prompt_name == "stock_company" else prompt_name
+        return PROMPT_VERSIONS.get(canonical, "1.0")
 
     async def analyze(
         self,
@@ -146,7 +147,21 @@ class LLMService:
             context["available_evidence_ids"] = sorted(evidence_attributor.source_registry.keys())
 
         # Build the user message from context
-        context_json = json.dumps(context, indent=2, default=str)
+        prompt_context = dict(context)
+        if evidence_attributor is not None:
+            # Full passages occur once. Preserve original inputs for persistence.
+            prompt_context["rag_context"] = {
+                kind: [f"{kind}_{item['id']}" for item in items]
+                for kind, items in context.get("rag_context", {}).items()
+            }
+            news = context.get("news_snapshot") or {}
+            prompt_context["news_snapshot"] = {
+                **news, "recent_news": [
+                    {"source_id": f"snapshot_news_{item['id']}"} if item.get("id") is not None else item
+                    for item in news.get("recent_news", [])
+                ],
+            }
+        context_json = json.dumps(prompt_context, indent=2, default=str)
         user_message = user_query or f"Analyze the following data and provide a structured investment analysis.\n\nContext:\n{context_json}"
 
         # OpenAI-compatible chat completions call via the framework engine.

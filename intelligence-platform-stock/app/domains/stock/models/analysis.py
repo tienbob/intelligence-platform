@@ -24,6 +24,8 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    desc,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -185,6 +187,10 @@ class Analysis(Base, TimestampMixin):
     """
 
     __tablename__ = "analyses"
+    __table_args__ = (
+        Index("ix_analyses_completed_latest", "company_id", desc("created_at"), desc("id"),
+              postgresql_where=text("status = 'completed'"), postgresql_include=["user_id"]),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     analysis_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, index=True)
@@ -257,6 +263,7 @@ class InvestmentScore(Base, TimestampMixin):
 
     __table_args__ = (
         Index("ix_investment_scores_company_ts", "company_id", "timestamp"),
+        Index("ix_investment_scores_latest", "company_id", desc("timestamp"), desc("id")),
     )
 
 

@@ -546,6 +546,10 @@ class IntelligencePipeline:
             **context.domain_snapshots,
         }
 
+        context_projector = getattr(domain, "get_llm_context", None)
+        if callable(context_projector):
+            context_dict = context_projector(context_dict)
+
         llm_kwargs: dict[str, Any] = {
             "system_prompt": system_prompt,
             "context": context_dict,

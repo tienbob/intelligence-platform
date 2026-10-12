@@ -213,6 +213,10 @@ class StockDomain:
 
     # ── Evidence attribution (optional, §32) ─────────────────────
 
+    def get_llm_context(self, context):
+        """Snapshots already contain the persisted observation/evidence values."""
+        return {key: value for key, value in context.items() if key not in ("observations", "evidence")}
+
     def get_evidence_attributor(self, context):
         """Supply claim→source attribution to the generic LLM stage.
 

@@ -6,6 +6,7 @@ access, provider calls, or inventing values for missing data.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
+import math
 from typing import Any
 from app.shared.entities import EntityRef, Evidence, IntelligenceContext, Observation
 
@@ -25,7 +26,12 @@ class StockContextBuilder:
         missing = [f'{section}_snapshot' for section in ('market', 'technical', 'fundamental', 'risk')
                    if not snapshots[f'{section}_snapshot']]
         fundamentals = snapshots['fundamental_snapshot']
-        if not fundamentals.get('metrics') and not fundamentals.get('latest_statement') and 'fundamental_snapshot' not in missing:
+        usable = any(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            for group in ('metrics', 'latest_statement')
+            for value in (fundamentals.get(group) or {}).values()
+        )
+        if not usable and 'fundamental_snapshot' not in missing:
             missing.append('fundamental_snapshot')
         return IntelligenceContext(
             entity={**company, 'domain': entity_ref.domain, 'entity_type': entity_ref.entity_type},

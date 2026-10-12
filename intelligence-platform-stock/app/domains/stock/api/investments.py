@@ -5,7 +5,8 @@ Investment opportunities API endpoints (Section 48).
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, true
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -47,24 +48,25 @@ async def get_investment_opportunities(
     Score filtering and LIMIT use the same effective score shown in the UI.
     """
     actor = get_actor(request)
-    score_ranked = select(
-        InvestmentScore.id.label("id"),
-        func.row_number().over(partition_by=InvestmentScore.company_id,
-                               order_by=(InvestmentScore.timestamp.desc(), InvestmentScore.id.desc())).label("rank"),
-    ).subquery()
-    analysis_ranked = select(
-        Analysis.id.label("id"),
-        func.row_number().over(partition_by=Analysis.company_id,
-                               order_by=(Analysis.created_at.desc(), Analysis.id.desc())).label("rank"),
-    ).where(Analysis.status == "completed").where(visible_to_actor(Analysis.user_id, actor)).subquery()
-    effective_score = func.coalesce(Analysis.investment_score, InvestmentScore.overall_score)
+    latest_score = (
+        select(InvestmentScore).where(InvestmentScore.company_id == Company.id)
+        .order_by(InvestmentScore.timestamp.desc(), InvestmentScore.id.desc())
+        .limit(1).correlate(Company).lateral("latest_score")
+    )
+    latest_analysis = (
+        select(Analysis).where(Analysis.company_id == Company.id, Analysis.status == "completed")
+        .where(visible_to_actor(Analysis.user_id, actor))
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc())
+        .limit(1).correlate(Company).lateral("latest_analysis")
+    )
+    score_row = aliased(InvestmentScore, latest_score)
+    analysis_row = aliased(Analysis, latest_analysis)
+    effective_score = func.coalesce(analysis_row.investment_score, score_row.overall_score)
     query = (
-        select(InvestmentScore, Company, Analysis)
+        select(score_row, Company, analysis_row)
         .select_from(Company)
-        .outerjoin(InvestmentScore, (InvestmentScore.company_id == Company.id)
-                   & InvestmentScore.id.in_(select(score_ranked.c.id).where(score_ranked.c.rank == 1)))
-        .outerjoin(Analysis, (Analysis.company_id == Company.id)
-                   & Analysis.id.in_(select(analysis_ranked.c.id).where(analysis_ranked.c.rank == 1)))
+        .outerjoin(latest_score, true())
+        .outerjoin(latest_analysis, true())
         .where(effective_score >= min_score)
     )
     if sector:
