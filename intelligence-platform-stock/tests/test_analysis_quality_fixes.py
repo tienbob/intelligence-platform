@@ -118,3 +118,18 @@ async def test_stock_prompt_has_one_copy_of_each_passage_and_preserves_inputs():
     assert 'observations' not in context and 'evidence' not in context
     assert context['rag_context']['news'][0]['content'] == passage
     assert context['news_snapshot']['recent_news'][0]['summary'] == 'Unique snapshot article body'
+
+
+@pytest.mark.asyncio
+async def test_stock_prompt_preserves_news_exclusion():
+    from app.domains.stock.manifest import StockDomain
+    context = {'rag_context': {'previous_analyses': []}}
+    result = dict(summary='Summary', market_interpretation='Interpretation', bull_case=[], bear_case=[],
+                  investment_thesis='Thesis', confidence=.75, causes=[])
+    engine = SimpleNamespace(chat_json=AsyncMock(return_value=(result, 5)), build_meta=lambda **kw: kw)
+    service = LLMService(api_key='test')
+    service._get_client = AsyncMock()
+    service._get_engine = lambda: engine
+    await service.analyze('prompt', context, evidence_attributor=StockDomain().get_evidence_attributor(context))
+    assert 'news_snapshot' not in engine.chat_json.call_args.args[1]
+    assert 'news_snapshot' not in context

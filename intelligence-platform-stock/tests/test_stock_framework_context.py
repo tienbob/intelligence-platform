@@ -97,7 +97,8 @@ def test_rag_adapter_filters_to_resolved_company(monkeypatch):
     monkeypatch.setattr(rag, 'RAGService', lambda session, **kwargs: retriever)
     result = asyncio.run(StockRAGPipelineAdapter().retrieve_context('arbitrary query', entity_id='AAPL'))
     assert result == {'news': []}
-    retriever.retrieve_context.assert_awaited_once_with('Analysis of AAPL Apple Inc.', company_id=7)
+    retriever.retrieve_context.assert_awaited_once_with('Analysis of AAPL Apple Inc.', company_id=7,
+        include_news=True, include_events=True, include_filings=True)
 
 
 def test_metadata_only_financial_statement_is_degraded():

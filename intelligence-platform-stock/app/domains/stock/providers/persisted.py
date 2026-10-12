@@ -16,6 +16,9 @@ class PersistedStockProvider:
         self._reader = reader_factory or StockSnapshotReader
 
     async def fetch(self, entity_ref: EntityRef) -> list[Observation]:
+        return await self.fetch_for_analysis(entity_ref, {})
+
+    async def fetch_for_analysis(self, entity_ref: EntityRef, parameters: dict) -> list[Observation]:
         if entity_ref.domain != 'stock' or entity_ref.entity_type != 'company':
             raise ValueError('Persisted stock data requires a stock company reference')
         async with self._sessions() as session:
@@ -27,8 +30,13 @@ class PersistedStockProvider:
                 'company': {field: getattr(company, field, None) for field in ('ticker', 'name', 'sector', 'industry', 'market_cap')},
             }
             for section in ('market', 'technical', 'fundamental', 'news', 'event', 'risk', 'anomaly'):
+                flag = {'technical': 'include_technical', 'anomaly': 'include_technical',
+                        'fundamental': 'include_fundamentals', 'news': 'include_news', 'event': 'include_news'}.get(section)
+                if flag and not parameters.get(flag, True):
+                    continue
                 snapshots[f'{section}_snapshot'] = await getattr(reader, f'build_{section}_snapshot')(company.id)
-            snapshots['macro_snapshot'] = await reader.macro_engine.get_macro_snapshot()
+            if parameters.get('include_macro', True):
+                snapshots['macro_snapshot'] = await reader.macro_engine.get_macro_snapshot()
             captured_at = datetime.now(timezone.utc)
             return [Observation(entity_ref=entity_ref, observed_at=captured_at,
                                 source=self.provider_name, kind=kind, data=data)

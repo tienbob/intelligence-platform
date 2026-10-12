@@ -154,13 +154,14 @@ class LLMService:
                 kind: [f"{kind}_{item['id']}" for item in items]
                 for kind, items in context.get("rag_context", {}).items()
             }
-            news = context.get("news_snapshot") or {}
-            prompt_context["news_snapshot"] = {
-                **news, "recent_news": [
-                    {"source_id": f"snapshot_news_{item['id']}"} if item.get("id") is not None else item
-                    for item in news.get("recent_news", [])
-                ],
-            }
+            if "news_snapshot" in context:
+                news = context.get("news_snapshot") or {}
+                prompt_context["news_snapshot"] = {
+                    **news, "recent_news": [
+                        {"source_id": f"snapshot_news_{item['id']}"} if item.get("id") is not None else item
+                        for item in news.get("recent_news", [])
+                    ],
+                }
         context_json = json.dumps(prompt_context, indent=2, default=str)
         user_message = user_query or f"Analyze the following data and provide a structured investment analysis.\n\nContext:\n{context_json}"
 

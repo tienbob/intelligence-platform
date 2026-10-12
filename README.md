@@ -8,7 +8,7 @@ The domain knows **WHAT** intelligence means.
 > **Current status:** the Stock framework analysis path is implemented,
 > including persisted-data ingestion, context assembly, company-scoped RAG,
 > scoring, evidence and result persistence. Select it with
-> `ANALYSIS_ENGINE=framework`; the configuration default remains `legacy`.
+> `ANALYSIS_ENGINE=framework`; framework is the only supported engine.
 > Completing this path does not imply that production rollout gates are
 > complete. See the [framework path guide](intelligence-platform-stock/docs/FRAMEWORK_ANALYSIS_PATH.md)
 > and [implementation plan](intelligence-platform-stock/docs/PLAN.md).
@@ -105,9 +105,10 @@ ANALYSIS_ENGINE=framework
 ```
 
 The framework reads stored company snapshots during a deep dive. Vendor fetching
-is handled separately by ingestion workers. Both engine paths use deterministic
-Python scoring; the LLM supplies the explanation. Use `ANALYSIS_ENGINE=legacy`
-to select the legacy orchestration.
+is handled separately by ingestion workers. The framework uses deterministic
+Python scoring; the LLM supplies the explanation. Legacy orchestration has been removed. Existing deployments must change
+`ANALYSIS_ENGINE=legacy` to `ANALYSIS_ENGINE=framework` before restarting.
+Optional news, fundamentals, technical and macro sections remain supported.
 
 The **Opportunities** page uses each company's latest completed deep dive visible
 to the signed-in user, with screening scores for companies awaiting analysis.
@@ -167,7 +168,7 @@ the `DomainModule` protocol (`app/intelligence/contracts.py`), add it to
 cd intelligence-platform-stock
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-DEBUG=false REDIS_CACHE_ENABLED=false ANALYSIS_ENGINE=legacy .venv/bin/python -m pytest tests -q
+DEBUG=false REDIS_CACHE_ENABLED=false ANALYSIS_ENGINE=framework .venv/bin/python -m pytest tests -q
 ```
 
 Keep the Compose Redis service running for the rate-limit integration test.
@@ -183,7 +184,7 @@ npm test
 npm run build
 ```
 
-Read-only comparison of framework and legacy contexts against the local database:
+Read-only comparison of framework contexts and persisted snapshot readers against the local database:
 
 ```bash
 docker compose exec -T python python scripts/verify_framework_context.py

@@ -65,6 +65,15 @@ class StockRAGPipelineAdapter:
     def __init__(self, embedding_service: Any = None):
         self._embedding_service = embedding_service
 
+    async def retrieve_context_for_analysis(self, query: str, request) -> dict[str, Any]:
+        parameters = request.parameters
+        return await self.retrieve_context(
+            query, entity_id=request.entity_ref.entity_id,
+            include_news=parameters.get("include_news", True),
+            include_events=parameters.get("include_news", True),
+            include_filings=parameters.get("include_fundamentals", True),
+        )
+
     async def retrieve_context(self, query: str, **kwargs: Any) -> dict[str, Any]:
         import app.domains.stock.normalization.companies  # noqa: F401  (registers normalizer)
         from app.core.database import async_session_factory
@@ -80,7 +89,10 @@ class StockRAGPipelineAdapter:
             if company is None:
                 raise LookupError(f"No Company record found for ticker {ticker}")
             return await rag.retrieve_context(
-                f"Analysis of {company.ticker} {company.name}", company_id=company.id
+                f"Analysis of {company.ticker} {company.name}", company_id=company.id,
+                include_news=kwargs.get("include_news", True),
+                include_events=kwargs.get("include_events", True),
+                include_filings=kwargs.get("include_filings", True),
             )
 
 

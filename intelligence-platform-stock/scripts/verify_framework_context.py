@@ -1,14 +1,16 @@
 import asyncio, copy, json, logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from sqlalchemy import select, text
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.disable(logging.CRITICAL)
 from app.core.database import async_session_factory
 from app.domains.stock.models.company import Company
 from app.domains.stock.models.analysis import InvestmentScore
 from app.domains.stock.manifest import StockDomain
 from app.domains.stock.providers.persisted import PersistedStockProvider
-from app.domains.stock.scoring.context_builder import ContextBuilder
+from app.domains.stock.snapshots import StockSnapshotReader
 from app.domains.stock.pipeline_factory import build_stock_pipeline
 from app.shared.entities import AnalysisRequest, EntityRef
 
@@ -42,7 +44,7 @@ class RecordedLLM:
     def __init__(self, expected): self.expected = expected
     async def analyze(self, context, **kwargs):
         for key, value in self.expected.items():
-            assert context[key] == value, f'{key}: legacy/framework mismatch'
+            assert context[key] == value, f'{key}: reader/framework mismatch'
         fixture = json.loads(Path('tests/golden/fixtures/aapl_pipeline.json').read_text())
         response = copy.deepcopy(fixture['llm_response'])
         response['_meta'] = {'model': 'recorded-fixture', 'provider': 'fixture', 'tokens_used': 0, 'prompt_version': '1.0'}
@@ -56,8 +58,11 @@ async def main():
     for company_id, ticker in identities:
         async with read_only() as session:
             company = await session.get(Company, company_id)
-            legacy = await ContextBuilder(session, rag_service=Rag()).build_full_context(company)
-        expected = {k: v for k, v in legacy.items() if k != 'rag_context'}
+            reader = StockSnapshotReader(session)
+            expected = {'company': {key:getattr(company,key,None) for key in ('ticker','name','sector','industry','market_cap')}}
+            for section in ('market','technical','fundamental','news','event','risk','anomaly'):
+                expected[f'{section}_snapshot'] = await getattr(reader,f'build_{section}_snapshot')(company.id)
+            expected['macro_snapshot'] = await reader.macro_engine.get_macro_snapshot()
         pipeline = build_stock_pipeline(registry=Registry(), rag_service=Rag(), llm_service=RecordedLLM(expected))
         result = await pipeline.run(AnalysisRequest(EntityRef('stock', 'company', ticker), analysis_type='company'))
         assert result.status == 'completed', result.summary

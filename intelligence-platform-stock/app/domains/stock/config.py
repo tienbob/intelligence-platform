@@ -9,7 +9,7 @@ app/core/config.py.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -116,14 +116,8 @@ class StockConfig(BaseSettings):
     SCORING_VERSION: str = "1.0"
 
     # ── Analysis engine selection (PLAN.md Gate 5.1) ─────────────
-    # "legacy"    → shared CompanyAnalysisService orchestration (current
-    #               production engine; ContextBuilder + LLMService +
-    #               InvestmentScoringEngine under one roof).
-    # "framework" → generic IntelligencePipeline via
-    #               pipeline_factory.build_stock_pipeline().
-    # Both production entry points (API + scheduled worker) route through
-    # execute_company_analysis(), which is the ONLY place this is read.
-    ANALYSIS_ENGINE: str = "legacy"
+    # Framework is the only supported company-analysis engine.
+    ANALYSIS_ENGINE: Literal["framework"] = "framework"
 
 
     # ── Recommendation Thresholds ────────────────────────────────

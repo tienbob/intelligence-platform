@@ -10,14 +10,10 @@ from __future__ import annotations
 from app.core.database import async_session_factory
 from app.core.logging import get_logger
 from app.domains.stock.models.analysis import Analysis
+from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
 from app.domains.stock.models.company import Company
 from app.domains.stock.scoring.analysis_validator import AnalysisValidationError
-from app.domains.stock.scoring.context_builder import ContextBuilder
-from app.domains.stock.scoring.evidence import EvidenceAttributor
-from app.domains.stock.scoring.llm import LLMService
-from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
 from app.domains.stock.services.company_analysis import (
-    CompanyAnalysisService,
     execute_company_analysis,
 )
 from app.domains.stock.scoring.risk import RiskEngine
@@ -68,11 +64,11 @@ async def run_company_analysis(company_id: int) -> Analysis | None:
 
     Thin entry-point wrapper: all contract-producing steps (context, LLM,
     validation, deterministic scoring, persistence of the canonical Analysis
-    contract) live in ``CompanyAnalysisService`` — shared with the API path.
+    contract) run through the framework and canonical AnalysisPersistence writer.
 
     This variant runs without progress reporting (``on_stage=None``) and
-    creates one complete row at the end. Callers today: Gate 3's legacy
-    oracle and batch contexts. See docs/PLAN_ANALYSIS_CONTRACT.md.
+    creates one complete row at the end. Callers include the scheduled analysis task
+    and batch contexts. See docs/PLAN_ANALYSIS_CONTRACT.md.
     """
     async with async_session_factory() as session:
         company = await session.get(Company, company_id)
@@ -81,15 +77,8 @@ async def run_company_analysis(company_id: int) -> Analysis | None:
             return None
 
         try:
-            service = CompanyAnalysisService(
-                session,
-                context_builder=ContextBuilder(session),
-                llm_service=LLMService(),
-                evidence_attributor_factory=EvidenceAttributor,
-                scoring_engine_factory=lambda s: InvestmentScoringEngine(s),
-            )
             result = await execute_company_analysis(
-                session, company, legacy_service=service
+                session, company
             )
             return result.analysis
 

@@ -839,3 +839,7 @@ Old persistence orchestration
 ```
 
 That resolves the apparent conflict between the two checklists: **Gate 3 compares against the scheduled-worker behavior because it is an important production oracle; Gate 5 moves that same worker onto the framework; Gate 6 removes its old orchestration, not the worker itself.**
+
+## Code status — 2026-10-12
+
+Framework is now the sole company-analysis execution path. Optional context inclusions are supported, canonical persistence is extracted into AnalysisPersistence, and both API and scheduled wrappers no longer construct legacy services. Legacy context orchestration and live legacy golden execution are removed; historical baselines remain available for comparison. These code changes do not certify production monitoring, semantic equivalence, or storage-ownership migration gates as complete. See FRAMEWORK_ANALYSIS_PATH.md for deployment requirements.

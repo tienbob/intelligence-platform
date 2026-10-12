@@ -191,6 +191,9 @@ class IntelligencePipeline:
             current_stage = "rag"
             await self._announce_stage(current_stage)
             rag_context = await self._retrieve_context(domain, request)
+            rag_filter = getattr(domain, "filter_rag_context", None)
+            if callable(rag_filter):
+                rag_context = rag_filter(rag_context, request.parameters)
             stages[current_stage] = "success" if any(rag_context.values()) else (
                 "degraded" if self._rag is not None else "skipped"
             )
@@ -201,6 +204,9 @@ class IntelligencePipeline:
             context = await self._build_context(
                 domain, request.entity_ref, evidence, observations, rag_context
             )
+            context_filter = getattr(domain, "filter_analysis_context", None)
+            if callable(context_filter):
+                context = context_filter(context, request.parameters)
             stages[current_stage] = "degraded" if context.metadata.get("missing_snapshots") else "success"
             if context.metadata.get("missing_snapshots"):
                 stage_details[current_stage] = list(context.metadata["missing_snapshots"])
@@ -382,7 +388,8 @@ class IntelligencePipeline:
 
             attempted += 1
             try:
-                raw_data = await provider.fetch(request.entity_ref)
+                analysis_fetch = getattr(provider, "fetch_for_analysis", None)
+                raw_data = await analysis_fetch(request.entity_ref, request.parameters) if callable(analysis_fetch) else await provider.fetch(request.entity_ref)
                 for item in raw_data:
                     if isinstance(item, Observation):
                         if item.entity_ref != request.entity_ref:
@@ -483,6 +490,9 @@ class IntelligencePipeline:
 
         try:
             query = f"Analysis of {request.entity_ref.entity_type} {request.entity_ref.entity_id}"
+            analysis_retrieval = getattr(self._rag, "retrieve_context_for_analysis", None)
+            if callable(analysis_retrieval):
+                return await analysis_retrieval(query, request)
             return await self._rag.retrieve_context(
                 query,
                 domain=request.entity_ref.domain,

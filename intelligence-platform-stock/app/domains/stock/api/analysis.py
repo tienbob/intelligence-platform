@@ -35,10 +35,6 @@ from app.domains.stock.schemas.analysis import (
     ConfidenceBreakdown,
     InvestmentRecommendation,
 )
-from app.domains.stock.scoring.context_builder import ContextBuilder
-from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
-from app.domains.stock.scoring.evidence import EvidenceAttributor
-from app.domains.stock.scoring.llm import LLMService
 from app.domains.stock.services.company_analysis import (
     AnalysisCancelled, execute_company_analysis, lock_active_analysis,
 )
@@ -97,7 +93,7 @@ async def list_analysis_jobs(
         })
 
     return {"jobs": jobs, "total": sum(status_counts.values()), "status_counts": status_counts,
-            "supports_inclusions": get_stock_config().ANALYSIS_ENGINE != "framework"}
+            "supports_inclusions": True}
 
 
 def _failure_reason(exc: Exception) -> str:
@@ -134,13 +130,12 @@ async def run_company_analysis(
     Background task for POST /analysis/company.
 
     Thin entry-point wrapper: all contract-producing steps live in the
-    shared ``CompanyAnalysisService``. This wrapper owns only what is
+    framework execution core. This wrapper owns only what is
     entry-point-specific — loading the pre-created row, reporting stage
     transitions to the polling frontend, and marking failures.
     """
     from app.core.database import async_session_factory
     from app.core.logging import get_logger
-    from app.domains.stock.services.company_analysis import CompanyAnalysisService
 
     logger = get_logger(__name__)
 
@@ -169,17 +164,9 @@ async def run_company_analysis(
                 current.status = name
                 await session.commit()
 
-            service = CompanyAnalysisService(
-                session,
-                context_builder=ContextBuilder(session),
-                llm_service=LLMService(),
-                evidence_attributor_factory=EvidenceAttributor,
-                scoring_engine_factory=lambda s: InvestmentScoringEngine(s),
-            )
             await execute_company_analysis(
                 session,
                 company,
-                legacy_service=service,
                 existing=analysis,
                 include_news=include_news,
                 include_fundamentals=include_fundamentals,
@@ -218,12 +205,6 @@ async def create_company_analysis(
 ):
     """Create a company analysis job (Section 46). User-bound to the caller."""
     actor = get_actor(fastapi_request)
-    from app.domains.stock.config import get_stock_config
-    if get_stock_config().ANALYSIS_ENGINE == "framework" and not all((
-        request.include_news, request.include_fundamentals, request.include_technical, request.include_macro
-    )):
-        raise HTTPException(status_code=422, detail="This analysis engine requires all data sources")
-
     # Company must exist before an analysis row can reference it. An untracked
     # ticker is scheduled for durable ingestion and the request answers
     # promptly: running the pipeline here would repeat the audit O02 problem
