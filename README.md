@@ -98,6 +98,8 @@ for coverage limits and migration 0021 requirements on existing databases.
 
 ## AI Analysis
 
+New to stock terminology? Read [Stock and finance terms in plain English](intelligence-platform-stock/docs/STOCK_TERMS_IN_PLAIN_ENGLISH.md) for the app's scores, financial ratios, indicators, AI explanations and backtesting concepts.
+
 The framework reads stored company snapshots during a deep dive. Vendor fetching
 is handled separately by ingestion workers. The framework uses deterministic
 Python scoring; the LLM supplies the explanation. API jobs and scheduled analyses always run the framework. No engine selector is required.
