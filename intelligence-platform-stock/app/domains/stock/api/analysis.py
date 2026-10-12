@@ -75,7 +75,6 @@ async def list_analysis_jobs(
         .group_by(Analysis.status)
     )
     status_counts = dict(counts.all())
-    from app.domains.stock.config import get_stock_config
 
     jobs = []
     for analysis, ticker in rows:

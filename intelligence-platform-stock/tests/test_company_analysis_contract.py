@@ -159,7 +159,7 @@ def _service(session, llm):
             def factory(**overrides):
                 return build_stock_pipeline(registry=Registry(), rag_service=Rag(), llm_service=LLM(), **overrides)
             with patch('app.domains.stock.services.company_analysis._build_framework_pipeline', factory):
-                return await execute_company_analysis(session, company, engine='framework', score_loader=loader, **kwargs)
+                return await execute_company_analysis(session, company, score_loader=loader, **kwargs)
     return Harness(), attributors
 
 

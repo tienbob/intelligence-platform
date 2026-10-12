@@ -7,8 +7,8 @@ The domain knows **WHAT** intelligence means.
 
 > **Current status:** the Stock framework analysis path is implemented,
 > including persisted-data ingestion, context assembly, company-scoped RAG,
-> scoring, evidence and result persistence. Select it with
-> `ANALYSIS_ENGINE=framework`; framework is the only supported engine.
+> scoring, evidence and result persistence. Both API and scheduled analyses
+> always use the framework.
 > Completing this path does not imply that production rollout gates are
 > complete. See the [framework path guide](intelligence-platform-stock/docs/FRAMEWORK_ANALYSIS_PATH.md)
 > and [implementation plan](intelligence-platform-stock/docs/PLAN.md).
@@ -98,16 +98,9 @@ for coverage limits and migration 0021 requirements on existing databases.
 
 ## AI Analysis
 
-Set the engine in the root `.env`:
-
-```dotenv
-ANALYSIS_ENGINE=framework
-```
-
 The framework reads stored company snapshots during a deep dive. Vendor fetching
 is handled separately by ingestion workers. The framework uses deterministic
-Python scoring; the LLM supplies the explanation. Legacy orchestration has been removed. Existing deployments must change
-`ANALYSIS_ENGINE=legacy` to `ANALYSIS_ENGINE=framework` before restarting.
+Python scoring; the LLM supplies the explanation. API jobs and scheduled analyses always run the framework. No engine selector is required.
 Optional news, fundamentals, technical and macro sections remain supported.
 
 The **Opportunities** page uses each company's latest completed deep dive visible
@@ -168,7 +161,7 @@ the `DomainModule` protocol (`app/intelligence/contracts.py`), add it to
 cd intelligence-platform-stock
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-DEBUG=false REDIS_CACHE_ENABLED=false ANALYSIS_ENGINE=framework .venv/bin/python -m pytest tests -q
+DEBUG=false REDIS_CACHE_ENABLED=false .venv/bin/python -m pytest tests -q
 ```
 
 Keep the Compose Redis service running for the rate-limit integration test.

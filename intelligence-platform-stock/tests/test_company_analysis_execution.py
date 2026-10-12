@@ -98,20 +98,14 @@ def _install_framework_fake(monkeypatch):
     return pipe, loader
 
 
-# ── Flag routing ─────────────────────────────────────────────────
+# ── Framework execution ─────────────────────────────────────────────────
 
 
-def test_removed_legacy_engine_is_rejected():
-    import pytest
-    with pytest.raises(ValueError, match="legacy orchestration was removed"):
-        asyncio.run(ca.execute_company_analysis(None, _FakeCompany(), engine="legacy"))
-
-
-def test_framework_engine_routes_to_pipeline(monkeypatch):
+def test_execution_routes_to_pipeline(monkeypatch):
     pipe, loader = _install_framework_fake(monkeypatch)
     session = _PersistSession()
     res = asyncio.run(ca.execute_company_analysis(
-        session, _FakeCompany(), engine="framework", score_loader=loader,
+        session, _FakeCompany(), score_loader=loader,
     ))
     assert pipe.requests and pipe.requests[0].entity_ref.entity_id == TICKER
     assert res.analysis.investment_score == 71.5
@@ -121,15 +115,15 @@ def test_framework_engine_routes_to_pipeline(monkeypatch):
 
 def test_optional_sources_are_forwarded_to_framework(monkeypatch):
     pipe, loader = _install_framework_fake(monkeypatch)
-    asyncio.run(ca.execute_company_analysis(_PersistSession(), _FakeCompany(), engine="framework",
+    asyncio.run(ca.execute_company_analysis(_PersistSession(), _FakeCompany(), 
         include_news=False, include_fundamentals=False, include_technical=False, include_macro=False, score_loader=loader))
     assert pipe.requests[0].parameters == dict(include_news=False, include_fundamentals=False,
                                                include_technical=False, include_macro=False)
 
 
-def test_both_wrappers_respect_framework_flag(monkeypatch):
+def test_both_wrappers_use_framework(monkeypatch):
     """Entry-point neutrality: API-style (existing row + stages) and
-    worker-style (no row) both hit the pipeline when flag says framework."""
+    worker-style (no row) both hit the framework pipeline."""
     pipe, loader = _install_framework_fake(monkeypatch)
     existing = SimpleNamespace(analysis_id="x", id=9, status="collecting_data")
     stages = []
@@ -147,13 +141,13 @@ def test_both_wrappers_respect_framework_flag(monkeypatch):
         await ca.execute_company_analysis(
             session, _FakeCompany(),
             existing=existing, on_stage=on_stage,
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     async def worker_style():
         await ca.execute_company_analysis(
             _PersistSession(), _FakeCompany(),
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     asyncio.run(api_style())
@@ -207,7 +201,7 @@ def test_framework_preserves_complete_llm_response_and_claim_rows(monkeypatch):
     async def run(request): return result
     pipe.run = run
     session = _PersistSession()
-    saved = asyncio.run(ca.execute_company_analysis(session, _FakeCompany(), engine='framework', score_loader=loader))
+    saved = asyncio.run(ca.execute_company_analysis(session, _FakeCompany(), score_loader=loader))
     assert saved.analysis.llm_analysis['investment_thesis'] == 'Preserved thesis'
     assert saved.analysis.llm_analysis['confidence'] == 0.72
     assert saved.analysis.confidence_score == 0.9

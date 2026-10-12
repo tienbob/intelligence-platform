@@ -146,14 +146,9 @@ async def execute_company_analysis(
     session: AsyncSession, company: Company, *, existing: Analysis | None = None,
     include_news: bool = True, include_fundamentals: bool = True,
     include_technical: bool = True, include_macro: bool = True,
-    on_stage: StageCallback | None = None, engine: str | None = None, score_loader=None,
+    on_stage: StageCallback | None = None, score_loader=None,
 ) -> AnalysisExecutionResult:
     """Both entry points execute the same framework with explicit context options."""
-    if engine is None:
-        from app.domains.stock.config import get_stock_config
-        engine = get_stock_config().ANALYSIS_ENGINE
-    if engine != "framework":
-        raise ValueError("Only ANALYSIS_ENGINE=framework is supported; legacy orchestration was removed")
     return await _execute_framework(
         session, company, existing=existing, on_stage=on_stage, score_loader=score_loader,
         parameters=dict(include_news=include_news, include_fundamentals=include_fundamentals,

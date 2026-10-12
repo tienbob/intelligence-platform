@@ -20,7 +20,7 @@ The domain knows WHAT intelligence means.
     and optional-capability scoring (verified by
     tests/framework/test_pipeline.py).
 
-    Stock production can select this pipeline with ANALYSIS_ENGINE=framework.
+    Stock production uses this pipeline for all company analyses.
     Domains supply persisted observations, context, retrieval, and scoring;
     this orchestrator remains independent of domain models.
 

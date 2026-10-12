@@ -465,39 +465,14 @@ API ───────────────┐
 Scheduled Worker ──┘
 ```
 
-## 5.1 Feature flag
+## 5.1 Single execution path
 
-* [x] Implement:
-
-  ```text
-  ANALYSIS_ENGINE=legacy|framework
-  ```
-
-  * `app/domains/stock/config.py` (`ANALYSIS_ENGINE`, default `legacy`).
-  * Single dispatch point reads the flag once for **both** entry points
-    (`services/company_analysis.py::execute_company_analysis`).
-  * Documented in root `.env.example`.
-  * Default remains `legacy` until 5.2 switchover.
-
-* [x] Test:
-
-  ```text
-  legacy → framework
-  framework → legacy
-  ```
-
-  * `tests/test_engine_flag.py` flips the flag in both directions; 8/8 tests pass
-    (flag tests + canonical analysis-contract tests + worker-persistence tests).
-
-* [x] Verify both entry points respect the flag.
-
-  * API (`api/analysis.py`) and worker (`workers/analysis_worker.py`) both route
-    through `execute_company_analysis`; flipping `ANALYSIS_ENGINE` switches both
-    simultaneously (asserted per entry point in `test_engine_flag.py`).
-  * Framework path satisfies the canonical completed-analysis contract including
-    all six domain snapshots (`macro_snapshot` now emitted by stock's ContextBuilder
-    from fred observations); `domain_snapshots` flows through
-    `AnalysisResult.metadata` into canonical persistence.
+* [x] API and scheduled worker always call the framework through
+  `services/company_analysis.py::execute_company_analysis`.
+* [x] Remove the engine selector after removing legacy orchestration.
+* [x] Verify both entry points and canonical persistence in
+  `tests/test_company_analysis_execution.py`, analysis-contract tests and
+  worker-persistence tests.
 
 ## 5.2 Switch production
 

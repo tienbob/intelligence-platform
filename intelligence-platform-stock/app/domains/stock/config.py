@@ -9,7 +9,7 @@ app/core/config.py.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, List, Optional, Literal
+from typing import Any, List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -114,11 +114,6 @@ class StockConfig(BaseSettings):
     # ── Scoring Versioning ───────────────────────────────────────
     SCORING_MODEL: str = "investment_score_v1"
     SCORING_VERSION: str = "1.0"
-
-    # ── Analysis engine selection (PLAN.md Gate 5.1) ─────────────
-    # Framework is the only supported company-analysis engine.
-    ANALYSIS_ENGINE: Literal["framework"] = "framework"
-
 
     # ── Recommendation Thresholds ────────────────────────────────
     RECOMMENDATION_THRESHOLDS: List[dict[str, Any]] = Field(default_factory=lambda: [
