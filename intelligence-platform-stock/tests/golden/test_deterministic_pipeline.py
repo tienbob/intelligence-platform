@@ -124,6 +124,18 @@ def patch_db(monkeypatch):
     )
     monkeypatch.setattr(companies_mod, "EntityResolver", _FakeResolver)
     monkeypatch.setattr(inv_mod, "InvestmentScoringEngine", _FakeEngine)
+    import app.domains.stock.providers.persisted as persisted
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    _FakeCompany.ticker = 'AAPL'
+    for field, value in FIXTURE['domain_snapshots']['company'].items():
+        setattr(_FakeCompany, field, value)
+    reader = SimpleNamespace(macro_engine=SimpleNamespace(get_macro_snapshot=AsyncMock(return_value=FIXTURE['domain_snapshots']['macro_snapshot'])))
+    for section in ('market', 'technical', 'fundamental', 'news', 'event', 'risk', 'anomaly'):
+        setattr(reader, f'build_{section}_snapshot', AsyncMock(return_value=FIXTURE['domain_snapshots'][f'{section}_snapshot']))
+    monkeypatch.setattr(persisted, 'async_session_factory', lambda: _FakeSessionCM())
+    monkeypatch.setattr(persisted, 'EntityResolver', _FakeResolver)
+    monkeypatch.setattr(persisted, 'StockSnapshotReader', lambda session: reader)
     # The pipeline uses the global engine indirectly through nothing else;
     # guard against accidental real connections.
     monkeypatch.setattr(db, "async_session_factory", lambda: (_ for _ in ()).throw(
@@ -164,6 +176,8 @@ def test_aapl_pipeline_fixture_end_to_end(patch_db):
     assert result.recommendation == exp["recommendation"]
     assert len(result.evidence) == exp["evidence_count"]
 
+    assert result.metadata["domain_snapshots"] == FIXTURE["domain_snapshots"]
+    assert result.metadata["llm_output"]["investment_thesis"] == FIXTURE["llm_response"]["investment_thesis"]
     assert result.metadata["scoring_metadata"]["score_id"] == 101
     stages = result.metadata["stages"]
     assert list(stages) == [

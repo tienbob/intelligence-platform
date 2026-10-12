@@ -115,17 +115,6 @@ class StockConfig(BaseSettings):
     SCORING_MODEL: str = "investment_score_v1"
     SCORING_VERSION: str = "1.0"
 
-    # ── Analysis engine selection (PLAN.md Gate 5.1) ─────────────
-    # "legacy"    → shared CompanyAnalysisService orchestration (current
-    #               production engine; ContextBuilder + LLMService +
-    #               InvestmentScoringEngine under one roof).
-    # "framework" → generic IntelligencePipeline via
-    #               pipeline_factory.build_stock_pipeline().
-    # Both production entry points (API + scheduled worker) route through
-    # execute_company_analysis(), which is the ONLY place this is read.
-    ANALYSIS_ENGINE: str = "legacy"
-
-
     # ── Recommendation Thresholds ────────────────────────────────
     RECOMMENDATION_THRESHOLDS: List[dict[str, Any]] = Field(default_factory=lambda: [
         {"threshold": 80, "category": "STRONG_OPPORTUNITY"},

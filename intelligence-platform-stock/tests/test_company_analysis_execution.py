@@ -1,9 +1,4 @@
-"""Gate 5.1 — ANALYSIS_ENGINE flag (docs/PLAN.md §5.1).
-
-Both production entry points route through execute_company_analysis(), the
-single reader of the flag; flipping it must switch BOTH, and each engine must
-satisfy the canonical persisted contract. Fakes only — no LLM quota.
-"""
+"""Single framework routing, option forwarding, failures and canonical persistence."""
 
 from __future__ import annotations
 
@@ -93,7 +88,7 @@ class _PersistSession:
 
 def _install_framework_fake(monkeypatch):
     pipe = _FakePipeline()
-    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda: pipe)
+    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda **kw: pipe)
 
     async def loader(session, company_id, score_id):
         assert score_id == 101
@@ -103,29 +98,14 @@ def _install_framework_fake(monkeypatch):
     return pipe, loader
 
 
-# ── Flag routing ─────────────────────────────────────────────────
+# ── Framework execution ─────────────────────────────────────────────────
 
 
-def test_legacy_engine_routes_to_service(monkeypatch):
-    calls = {}
-
-    class _Svc:
-        async def execute(self, *, company, **kw):
-            calls["ran"] = company.ticker
-            return SimpleNamespace(analysis=SimpleNamespace(status="completed"))
-
-    res = asyncio.run(ca.execute_company_analysis(
-        None, _FakeCompany(), legacy_service=_Svc(), engine="legacy",
-    ))
-    assert calls["ran"] == TICKER
-    assert res.analysis.status == "completed"
-
-
-def test_framework_engine_routes_to_pipeline(monkeypatch):
+def test_execution_routes_to_pipeline(monkeypatch):
     pipe, loader = _install_framework_fake(monkeypatch)
     session = _PersistSession()
     res = asyncio.run(ca.execute_company_analysis(
-        session, _FakeCompany(), engine="framework", score_loader=loader,
+        session, _FakeCompany(), score_loader=loader,
     ))
     assert pipe.requests and pipe.requests[0].entity_ref.entity_id == TICKER
     assert res.analysis.investment_score == 71.5
@@ -133,33 +113,17 @@ def test_framework_engine_routes_to_pipeline(monkeypatch):
     ca.assert_completed_analysis_contract(res.analysis)
 
 
-def test_flag_flip_switches_engine(monkeypatch):
-    """PLAN.md §5.1: legacy→framework AND framework→legacy, repeatedly."""
-    ran = []
+def test_optional_sources_are_forwarded_to_framework(monkeypatch):
     pipe, loader = _install_framework_fake(monkeypatch)
-
-    class _Svc:
-        async def execute(self, *, company, **kw):
-            ran.append("legacy")
-            return SimpleNamespace(analysis=None)
-
-    async def go(engine):
-        await ca.execute_company_analysis(
-            _PersistSession(), _FakeCompany(),
-            legacy_service=_Svc(), engine=engine, score_loader=loader,
-        )
-
-    asyncio.run(go("legacy"))
-    asyncio.run(go("framework"))
-    asyncio.run(go("legacy"))
-    asyncio.run(go("framework"))
-    assert ran == ["legacy", "legacy"]          # service used twice
-    assert len(pipe.requests) == 2              # pipeline used twice
+    asyncio.run(ca.execute_company_analysis(_PersistSession(), _FakeCompany(), 
+        include_news=False, include_fundamentals=False, include_technical=False, include_macro=False, score_loader=loader))
+    assert pipe.requests[0].parameters == dict(include_news=False, include_fundamentals=False,
+                                               include_technical=False, include_macro=False)
 
 
-def test_both_wrappers_respect_framework_flag(monkeypatch):
+def test_both_wrappers_use_framework(monkeypatch):
     """Entry-point neutrality: API-style (existing row + stages) and
-    worker-style (no row) both hit the pipeline when flag says framework."""
+    worker-style (no row) both hit the framework pipeline."""
     pipe, loader = _install_framework_fake(monkeypatch)
     existing = SimpleNamespace(analysis_id="x", id=9, status="collecting_data")
     stages = []
@@ -177,13 +141,13 @@ def test_both_wrappers_respect_framework_flag(monkeypatch):
         await ca.execute_company_analysis(
             session, _FakeCompany(),
             existing=existing, on_stage=on_stage,
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     async def worker_style():
         await ca.execute_company_analysis(
             _PersistSession(), _FakeCompany(),
-            engine="framework", score_loader=loader,
+            score_loader=loader,
         )
 
     asyncio.run(api_style())
@@ -200,7 +164,7 @@ def test_framework_failure_raises(monkeypatch):
                 metadata={"stages": {"llm": "failed: boom"}},
             )
 
-    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda: _FailPipe())
+    monkeypatch.setattr(ca, "_build_framework_pipeline", lambda **kw: _FailPipe())
 
     async def go():
         try:
@@ -219,3 +183,31 @@ def test_framework_failure_raises(monkeypatch):
 if __name__ == "__main__":
     print("run via pytest")
 
+
+
+def test_framework_preserves_complete_llm_response_and_claim_rows(monkeypatch):
+    from app.domains.stock.models.analysis import AnalysisSource
+    pipe, loader = _install_framework_fake(monkeypatch)
+    result = _fake_pipeline_result()
+    payload = {
+        'summary': 'Full response', 'confidence': 0.72, 'investment_thesis': 'Preserved thesis',
+        'bull_case': ['Bull case'], 'bear_case': ['Bear case'],
+        'source_backed_claims': [{'claim': 'Revenue grew', 'source': {'type': 'financial', 'source': 'SEC', 'metric': 'revenue', 'value': 123, 'period': '2026-Q2'}}],
+        'evidence': {'evidence_sources': [{'id': 'news_1', 'source_name': 'finnhub'}], 'source_count': 1},
+        '_meta': {'model': 'fake-model', 'provider': 'fake', 'prompt_version': '1.0', 'tokens_used': 42},
+    }
+    result.metadata['llm_output'] = payload
+    result.metadata['rag_context'] = {'news': [{'id': 1}]}
+    async def run(request): return result
+    pipe.run = run
+    session = _PersistSession()
+    saved = asyncio.run(ca.execute_company_analysis(session, _FakeCompany(), score_loader=loader))
+    assert saved.analysis.llm_analysis['investment_thesis'] == 'Preserved thesis'
+    assert saved.analysis.llm_analysis['confidence'] == 0.72
+    assert saved.analysis.confidence_score == 0.9
+    assert saved.analysis.llm_analysis['_evidence'] == payload['evidence']
+    assert saved.analysis.llm_analysis['_input_context']['rag_context'] == {'news': [{'id': 1}]}
+    claims = [row for row in session.added if isinstance(row, AnalysisSource)]
+    assert len(claims) == 1
+    assert claims[0].claim == 'Revenue grew'
+    assert claims[0].source_name == 'SEC'

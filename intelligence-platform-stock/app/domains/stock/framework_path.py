@@ -1,15 +1,7 @@
-"""
-Stock framework execution path (Phase 8, Step 8.3).
+"""Compatibility helpers for the canonical Stock intelligence pipeline.
 
-Runs a full company analysis **through the DomainModule contract and the
-generic intelligence capabilities only** — no ``analysis_worker``
-orchestration. This is the migration twin of the production path:
-
-    production:  analysis_worker → engines → DB        (unchanged)
-    framework:   run_framework_analysis() → this module  (new)
-
-Both paths must produce structurally equivalent results for the same
-ticker; the golden harness compares them.
+Production dispatch, golden comparisons and this entry point all use
+build_stock_pipeline(); there is no second framework orchestration path.
 """
 
 from __future__ import annotations
@@ -42,118 +34,28 @@ async def resolve_entity(ticker: str) -> EntityRef:
 
 
 async def retrieve_rag_context(entity_ref: EntityRef) -> dict[str, Any]:
-    """Retrieve the Stock RAG context via the generic RAG core consumer."""
-    from app.domains.stock.scoring.rag import RAGService
-
-    rag = RAGService()
-    return await rag.retrieve_context(str(entity_ref.entity_id))
-
-
-async def analyze_llm(
-    context_dict: dict[str, Any],
-    *,
-    evidence_attributor: Any = None,
-) -> dict[str, Any]:
-    """Run the Stock LLM analysis with validation + evidence attribution."""
-    from app.domains.stock.scoring.analysis_validator import (
-        AnalysisValidator,
-        AnalysisValidationError,
-    )
-    from app.domains.stock.scoring.llm import LLMService
-
-    llm = LLMService()
-    system_prompt = llm.load_prompt("company_analysis")
-    result = await llm.analyze(
-        system_prompt,
-        context_dict,
-        user_query=None,
-        evidence_attributor=evidence_attributor,
-        analysis_type="company",
-        prompt_name="company_analysis",
-    )
-
-    # Framework-agnostic validation of the structured output.
-    try:
-        AnalysisValidator.validate_company_analysis(result)
-    except AnalysisValidationError:
-        logger.exception("Framework-path LLM output failed validation")
-        raise
-    return result
+    """Use the same session-scoped, entity-filtered retrieval as production."""
+    from app.domains.stock.pipeline_factory import StockRAGPipelineAdapter
+    return await StockRAGPipelineAdapter().retrieve_context(entity_ref.entity_id, entity_id=entity_ref.entity_id)
 
 
 async def run_framework_analysis(ticker: str) -> dict[str, Any]:
-    """
-    Execute a complete Stock analysis through the DomainModule contract.
-
-    Stages (all capabilities come from either ``app.intelligence`` or the
-    Stock manifest accessors — never from worker orchestration):
-
-        1. Entity resolution      (generic service + Stock normalizer)
-        2. RAG retrieval          (generic core via Stock bucket policy)
-        3. Context construction   (manifest.get_context_builder)
-        4. LLM analysis           (generic LLM engine + Stock prompts)
-        5. Scoring                (manifest.get_scoring_strategy)
-
-    Returns a structured dict suitable for golden comparison.
-    """
-    domain = get_registry().get("stock")
-    if domain is None:
-        raise RuntimeError("Stock domain not registered")
-
-    # 1. Entity resolution
-    entity_ref = await resolve_entity(ticker)
-
-    # 2. RAG retrieval (bucket semantics live in Stock; mechanics in framework)
-    rag_context = await retrieve_rag_context(entity_ref)
-
-    # 3. Context construction via the manifest contract
-    builder = domain.get_context_builder()
-    context = await builder.build(
-        entity_ref=entity_ref,
-        evidence=[],
-        observations=[],
-        rag_context=rag_context,
-    )
-
-    # Flatten to the dict shape Stock's LLM consumes.
-    context_dict = {
-        "entity": context.entity,
-        "rag_context": context.rag_context,
-        **context.domain_snapshots,
-    }
-
-    # 4. LLM analysis (+ validation + evidence attribution inside)
-    # Use the domain's factory so sources are registered from the RAG
-    # context, same as the generic pipeline's §32 path.
-    attributor = domain.get_evidence_attributor(context_dict)
-    # Inject available source IDs into the context dict so the LLM
-    # can cite them via `evidence_ids` in its structured output.
-    context_dict["available_evidence_ids"] = sorted(
-        attributor.source_registry.keys()
-    )
-    llm_output = await analyze_llm(context_dict, evidence_attributor=attributor)
-
-    # 5. Domain scoring via the manifest contract
-    strategy = domain.get_scoring_strategy()
-    score_result = await strategy.score(entity_ref, context, llm_output)
-
+    """Compatibility entry point; all orchestration belongs to the canonical pipeline."""
+    from app.domains.stock.pipeline_factory import run_stock_analysis
+    result = await run_stock_analysis(ticker)
+    if result.status != "completed":
+        raise RuntimeError(f"Framework analysis failed: {result.metadata.get('stages', {})}")
+    metadata = result.metadata
+    score = metadata.get('scoring_metadata', {})
+    llm = metadata.get('llm_output', {})
     return {
-        "entity": {
-            "domain": entity_ref.domain,
-            "entity_type": entity_ref.entity_type,
-            "entity_id": entity_ref.entity_id,
-        },
-        "rag_counts": {
-            bucket: len(items) for bucket, items in rag_context.items()
-        },
-        "evidence_source_count": len(
-            llm_output.get("evidence", {}).get("evidence_sources", [])
-        ),
-        "llm_summary_present": bool(llm_output.get("summary")),
-        "score": score_result.get("score"),
-        "confidence": score_result.get("confidence"),
-        "recommendation": score_result.get("recommendation"),
-        "components": score_result.get("components", {}),
-        "scoring_model": score_result.get("scoring_model"),
-        "scoring_version": score_result.get("scoring_version"),
+        'entity': {'domain': result.entity_ref.domain, 'entity_type': result.entity_ref.entity_type,
+                   'entity_id': result.entity_ref.entity_id},
+        'rag_counts': {bucket: len(items) for bucket, items in metadata.get('rag_context', {}).items()},
+        'evidence_source_count': len(llm.get('evidence', {}).get('evidence_sources', [])),
+        'llm_summary_present': bool(result.summary),
+        'score': result.score, 'confidence': result.confidence,
+        'recommendation': result.recommendation,
+        'components': score.get('components', {}),
+        'scoring_model': score.get('scoring_model'), 'scoring_version': score.get('scoring_version'),
     }

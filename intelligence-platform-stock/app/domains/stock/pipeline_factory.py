@@ -31,12 +31,13 @@ def build_stock_pipeline(**overrides: Any) -> IntelligencePipeline:
     Keyword overrides are passed straight through to the pipeline
     constructor (useful for tests / partial re-wiring).
     """
+    import app.domains.stock.normalization.companies  # noqa: F401
     from app.domains.stock.scoring.llm import LLMService as StockLLMService
-    from app.domains.stock.scoring.rag import RAGService as StockRAGService
 
     kwargs: dict[str, Any] = {
         "rag_service": StockRAGPipelineAdapter(),
         "llm_service": StockLLMService(),
+        "validation_service": StockValidationAdapter(),
     }
     kwargs.update(overrides)
 
@@ -64,6 +65,15 @@ class StockRAGPipelineAdapter:
     def __init__(self, embedding_service: Any = None):
         self._embedding_service = embedding_service
 
+    async def retrieve_context_for_analysis(self, query: str, request) -> dict[str, Any]:
+        parameters = request.parameters
+        return await self.retrieve_context(
+            query, entity_id=request.entity_ref.entity_id,
+            include_news=parameters.get("include_news", True),
+            include_events=parameters.get("include_news", True),
+            include_filings=parameters.get("include_fundamentals", True),
+        )
+
     async def retrieve_context(self, query: str, **kwargs: Any) -> dict[str, Any]:
         import app.domains.stock.normalization.companies  # noqa: F401  (registers normalizer)
         from app.core.database import async_session_factory
@@ -74,7 +84,16 @@ class StockRAGPipelineAdapter:
             rag = _StockRAGService(
                 session, embedding_service=self._embedding_service
             )
-            return await rag.retrieve_context(ticker)
+            from app.domains.stock.normalization.companies import EntityResolver
+            company = await EntityResolver(session).resolve(ticker=ticker)
+            if company is None:
+                raise LookupError(f"No Company record found for ticker {ticker}")
+            return await rag.retrieve_context(
+                f"Analysis of {company.ticker} {company.name}", company_id=company.id,
+                include_news=kwargs.get("include_news", True),
+                include_events=kwargs.get("include_events", True),
+                include_filings=kwargs.get("include_filings", True),
+            )
 
 
 async def run_stock_analysis(ticker: str, **overrides: Any):
@@ -94,3 +113,14 @@ async def run_stock_analysis(ticker: str, **overrides: Any):
         analysis_type="company",
     )
     return await pipeline.run(request)
+
+
+class StockValidationAdapter:
+    """Apply Stock's output contract before generic result normalization."""
+
+    async def validate(self, output, domain="stock", analysis_type="company"):
+        from app.domains.stock.scoring.analysis_validator import AnalysisValidator
+        from app.intelligence.validation import ValidationService
+        if analysis_type == "company":
+            AnalysisValidator.validate_company_analysis(output)
+        return await ValidationService().validate(output, domain, analysis_type)

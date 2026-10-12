@@ -227,63 +227,6 @@ def compare(baseline: dict, reference: dict) -> list[str]:
     return issues
 
 
-async def _run_legacy_path(ticker: str) -> dict:
-    """
-    Execute the LEGACY production path (plan §11 oracle):
-
-        ContextBuilder → EvidenceAttributor → LLMService.analyze_company
-        → AnalysisValidator → InvestmentScoringEngine
-
-    This is exactly what analysis_worker.run_company_analysis does.
-    """
-    from sqlalchemy import select
-
-    from app.core.database import async_session_factory
-    from app.domains.stock.models.company import Company
-    from app.domains.stock.scoring.investment_scoring import InvestmentScoringEngine
-    from app.domains.stock.workers.analysis_worker import run_company_analysis
-
-    out: dict = {"path": "legacy"}
-    async with async_session_factory() as session:
-        result = await session.execute(
-            select(Company).where(Company.ticker == ticker.upper()).limit(1)
-        )
-        company = result.scalar_one_or_none()
-        if company is None:
-            return {"path": "legacy", "error": f"No Company row for {ticker.upper()}"}
-
-        # Full AI research analysis (context → evidence → LLM → validate).
-        try:
-            analysis = await run_company_analysis(company.id)
-            out["llm_success"] = analysis is not None
-            if analysis is not None:
-                out["llm_model"] = analysis.llm_model
-                out["llm_tokens"] = analysis.llm_tokens_used
-                out["analysis_confidence"] = analysis.confidence_score
-                out["summary_present"] = bool(
-                    (analysis.llm_analysis or {}).get("summary")
-                )
-        except Exception as exc:
-            out["llm_success"] = False
-            out["llm_error"] = str(exc)[:300]
-
-        # Deterministic investment score.
-        score_row = await InvestmentScoringEngine(session).calculate_score(company.id)
-
-    out.update(
-        {
-            "overall_score": float(score_row.overall_score),
-            "fundamental_score": float(score_row.fundamental_score or 0.0),
-            "technical_score": float(score_row.technical_score or 0.0),
-            "risk_score": float(score_row.risk_score or 0.0),
-            "confidence": float(score_row.confidence or 0.0),
-            "recommendation": score_row.recommendation,
-            "scoring_model": getattr(score_row, "scoring_model", None),
-            "stages": {"all": "success"},
-        }
-    )
-    return out
-
 async def _run_framework_path(ticker: str) -> dict:
     """
     Execute the FRAMEWORK path:
@@ -387,19 +330,6 @@ def compare_paths(legacy: dict, framework: dict) -> list[str]:
     return issues
 
 
-    out.update(
-        {
-            "overall_score": float(score_row.overall_score),
-            "fundamental_score": float(score_row.fundamental_score or 0.0),
-            "technical_score": float(score_row.technical_score or 0.0),
-            "risk_score": float(score_row.risk_score or 0.0),
-            "confidence": float(score_row.confidence or 0.0),
-            "recommendation": score_row.recommendation,
-            "scoring_model": getattr(score_row, "scoring_model", None),
-            "stages": {"all": "success"},
-        }
-    )
-    return out
 def main() -> int:
     parser = argparse.ArgumentParser(description="Stock golden-path harness")
     parser.add_argument("--ticker", default="AAPL")
@@ -407,11 +337,11 @@ def main() -> int:
     parser.add_argument("--compare", help="Compare against a saved snapshot JSON")
     parser.add_argument(
         "--path",
-        choices=["db", "legacy", "framework", "both"],
+        choices=["db", "framework"],
         default="db",
         help=(
             "db: capture persisted state only (original behavior); "
-            "legacy/framework/both: execute the analysis paths live "
+            "framework: execute the analysis path live "
             "(Phase 11 golden equivalence)"
         ),
     )
@@ -437,43 +367,8 @@ def main() -> int:
             "ticker": args.ticker.upper(),
             "captured_at": datetime.now(timezone.utc).isoformat(),
         }
-        if args.path == "both":
-            # Single event loop for BOTH paths: the global SQLAlchemy async
-            # engine binds connections to the loop they were created on, so
-            # running legacy and framework in separate asyncio.run() calls
-            # corrupts the second run with cross-loop futures.
-            #
-            # Bounded retry: transient LLM-provider errors (e.g. 503
-            # high-demand) should not fail the golden gate.
-            async def _one_attempt():
-                legacy = await _run_legacy_path(args.ticker)
-                framework = await _run_framework_path(args.ticker)
-                return legacy, framework, compare_paths(legacy, framework)
-
-            async def _both_with_retry(attempts: int = 3, delay_s: float = 20.0):
-                result = None
-                for attempt in range(1, attempts + 1):
-                    result = await _one_attempt()
-                    legacy, framework, issues = result
-                    print(f"--- attempt {attempt}: {'PASS' if not issues else f'{len(issues)} issue(s)'} ---")
-                    if not issues:
-                        return result
-                    transient = "503" in json.dumps([legacy, framework])
-                    if not transient:
-                        break
-                    print(f"transient provider error detected; retrying in {delay_s}s")
-                    await asyncio.sleep(delay_s)
-                return result
-
-            snapshot["legacy"], snapshot["framework"], issues = asyncio.run(
-                _both_with_retry()
-            )
-            print("--- legacy ---")
-            print(json.dumps(snapshot["legacy"], indent=2, default=str))
-            print("--- framework ---")
-            print(json.dumps(snapshot["framework"], indent=2, default=str))
-
-            violations += issues
+        snapshot['framework'] = asyncio.run(_run_framework_path(args.ticker))
+        print(json.dumps(snapshot['framework'], indent=2, default=str))
 
         if args.save:
             Path(args.save).write_text(json.dumps(snapshot, indent=2, default=str))

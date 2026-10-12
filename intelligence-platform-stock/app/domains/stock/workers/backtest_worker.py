@@ -15,9 +15,9 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.database import async_session_factory, commit_session
 from app.core.logging import get_logger
-from app.domains.stock.models.backtest import BacktestRun
+from app.domains.stock.models.backtest import BacktestRun, BacktestSnapshot
 from app.domains.stock.scoring.backtest import BacktestEngine
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 logger = get_logger(__name__)
 
@@ -70,15 +70,27 @@ async def run_scheduled_backtests() -> None:
 
 async def create_daily_snapshot() -> None:
     """
-    Create a daily point-in-time snapshot for backtesting.
-
-    This captures the current state of prices, scores, fundamentals,
-    events, and news so future backtests can use point-in-time data
-    without look-ahead bias.
+    Capture prices and scores once per UTC day, including across schedulers.
     """
     async with async_session_factory() as session:
-        engine = BacktestEngine(session)
         now = datetime.now(timezone.utc)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Transaction-scoped lock: released by the snapshot commit or rollback.
+        # Every scheduler checks again after acquiring the same day's lock.
+        await session.execute(text("SELECT pg_advisory_xact_lock(:namespace, :day)"),
+                              {"namespace": 16201, "day": int(now.strftime('%Y%m%d'))})
+        existing = (await session.execute(
+            select(BacktestSnapshot.id).where(
+                BacktestSnapshot.created_by == "scheduler",
+                BacktestSnapshot.as_of >= day_start,
+                BacktestSnapshot.as_of < day_start + timedelta(days=1),
+            ).limit(1)
+        )).scalar_one_or_none()
+        if existing is not None:
+            await session.rollback()
+            logger.info("Daily backtest snapshot already exists for %s: %d", day_start.date(), existing)
+            return
+        engine = BacktestEngine(session)
         snapshot = await engine.create_snapshot(
             name=f"daily_snapshot_{now.strftime('%Y%m%d')}",
             as_of=now,

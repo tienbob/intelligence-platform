@@ -79,8 +79,8 @@ class _FakeAttributor:
 
 
 class _FakeScore:
-    overall_score = 77.7
-    risk_score = 21.3
+    overall_score = 64.4
+    risk_score = 35.6
     confidence = 0.9
 
 
@@ -107,10 +107,12 @@ def test_run_company_analysis_sets_analysis_id(monkeypatch):
 
     session = _FakeSession()
     monkeypatch.setattr(aw, "async_session_factory", lambda: _FakeSessionCM(session))
-    monkeypatch.setattr(aw, "ContextBuilder", _FakeContextBuilder)
-    monkeypatch.setattr(aw, "EvidenceAttributor", _FakeAttributor)
-    monkeypatch.setattr(aw, "LLMService", lambda: _FakeLLM())
-    monkeypatch.setattr(aw, "InvestmentScoringEngine", _FakeScoringEngine)
+    from tests.test_company_analysis_contract import _service, _FakeLLM as ContractLLM
+    async def execute(session, company, **kwargs):
+        # Wrapper test uses the actual framework and canonical persistence.
+        harness, _ = _service(session, ContractLLM())
+        return await harness.execute(company=company, **kwargs)
+    monkeypatch.setattr(aw, "execute_company_analysis", execute)
 
     analysis = asyncio.run(run_company_analysis(7))
     assert analysis is not None
@@ -121,13 +123,13 @@ def test_run_company_analysis_sets_analysis_id(monkeypatch):
     # Canonical contract (docs/PLAN_ANALYSIS_CONTRACT.md): deterministic
     # scoring columns must be populated by the shared core regardless of
     # entry point — this is the regression for the null-score bug.
-    assert analysis.investment_score == 77.7
-    assert analysis.risk_score == 21.3
-    assert analysis.confidence_score == 0.9
+    assert analysis.investment_score == 64.4
+    assert analysis.risk_score == 35.6
+    assert analysis.confidence_score == 0.88
     assert analysis.analysis_version == "1.0"
     assert analysis.prompt_version == "1.0"
     assert analysis.llm_model == "fake"
-    assert analysis.llm_tokens_used == 1
+    assert analysis.llm_tokens_used == 5
     assert analysis.duration_seconds is not None
     assert analysis.status == "completed"
     assert analysis.market_snapshot == {}

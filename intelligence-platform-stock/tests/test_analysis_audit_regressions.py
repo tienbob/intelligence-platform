@@ -127,7 +127,7 @@ def test_detail_uses_only_its_own_score_snapshot(legacy, confidence):
 
 
 def test_claim_value_formatting():
-    from app.domains.stock.services.company_analysis import _claim_value
+    from app.domains.stock.services.analysis_persistence import _claim_value
 
     assert _claim_value(150000000000.0) == "150000000000"  # no ".0" wart
     assert _claim_value(1.0585) == "1.0585"
@@ -246,15 +246,18 @@ def test_job_list_returns_totals_dates_and_permissions():
     assert response["jobs"][0]["created_at"] == "2026-01-01T00:00:00+00:00"
 
 
-def test_framework_rejects_unsupported_inclusions_before_queueing(monkeypatch):
-    from app.domains.stock import config
-    monkeypatch.setattr(config, "get_stock_config", lambda: SimpleNamespace(ANALYSIS_ENGINE="framework"))
+def test_framework_accepts_optional_inclusions_before_resolution(monkeypatch):
+    from app.domains.stock.services import company_resolution
+    seen = []
+    async def resolve(ticker, db):
+        seen.append(ticker)
+        return None
+    monkeypatch.setattr(company_resolution, 'get_or_schedule_missing', resolve)
     db = AsyncMock()
     with pytest.raises(HTTPException) as exc:
         asyncio.run(api.create_company_analysis(AnalysisRequest(ticker="AAPL", include_news=False), BackgroundTasks(), request(), db))
-    assert exc.value.status_code == 422
-    db.execute.assert_not_awaited()
-    db.commit.assert_not_awaited()
+    assert exc.value.status_code == 404  # untracked company; options accepted
+    assert seen == ['AAPL']
 
 
 def test_request_settings_survive_analysis_completion():
@@ -281,3 +284,18 @@ def test_failed_detail_exposes_recovery_metadata():
     response = asyncio.run(api.get_analysis(analysis.analysis_id, request(), db))
     assert response.failure_reason == "Retry processing."
     assert response.request_options["include_news"] is False
+
+
+def test_cancellation_during_framework_stage_is_not_reported_as_failure():
+    session = _FakeSession()
+    existing = SimpleNamespace(analysis_id='job', id=42, status='collecting_data')
+    session.existing = existing
+    svc, _ = _service(session, _FakeLLM())
+    async def progress(name):
+        if name == 'risk_analysis':
+            existing.status = 'cancelled'
+            raise AnalysisCancelled('job')
+    with pytest.raises(AnalysisCancelled):
+        asyncio.run(svc.execute(company=_FakeCompany(), existing=existing, on_stage=progress))
+    assert existing.status == 'cancelled'
+    assert not session.added

@@ -146,7 +146,7 @@ export const getAnalysisJobs = (params = {}) => {
 // Investments
 export const getOpportunities = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
-  return request(`/investments/opportunities${qs ? `?${qs}` : ''}`);
+  return request(`/investments/opportunities${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
 };
 
 // Backtest

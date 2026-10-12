@@ -2,12 +2,12 @@
 
 from app.domains.stock.services.company_analysis import (  # noqa: F401
     AnalysisExecutionResult,
-    CompanyAnalysisService,
+    execute_company_analysis,
     assert_completed_analysis_contract,
 )
 
 __all__ = [
     "AnalysisExecutionResult",
-    "CompanyAnalysisService",
+    "execute_company_analysis",
     "assert_completed_analysis_contract",
 ]

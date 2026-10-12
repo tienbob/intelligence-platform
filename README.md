@@ -5,13 +5,13 @@
 The framework knows **HOW** to run intelligence.
 The domain knows **WHAT** intelligence means.
 
-> **Current status (honest):** the V3 framework is implemented and
-> test-verified through **Phase 12** (framework hardening + deterministic
-> Stock proof, 110/110 tests). Production analysis still runs through legacy
-> Stock orchestration; shadow production (Phase 13), storage-ownership
-> migration (Phase 15) and switchover (Phase 16) are pending. See
-> `intelligence-platform-stock/docs/CHECKLIST.md` for the gated roadmap and
-> `docs/Audit_result.md` for the latest audit.
+> **Current status:** the Stock framework analysis path is implemented,
+> including persisted-data ingestion, context assembly, company-scoped RAG,
+> scoring, evidence and result persistence. Both API and scheduled analyses
+> always use the framework.
+> Completing this path does not imply that production rollout gates are
+> complete. See the [framework path guide](intelligence-platform-stock/docs/FRAMEWORK_ANALYSIS_PATH.md)
+> and [implementation plan](intelligence-platform-stock/docs/PLAN.md).
 
 ## Repository Layout
 
@@ -51,9 +51,19 @@ silently swallowed.
 ## Running
 
 ```bash
-cp .env.example .env          # then fill in provider API keys
-docker compose up --build     # db, redis, python :8001, rails :3000, frontend :3000
+cp .env.example .env          # first setup only; then fill in keys and settings
+docker compose up -d --build
 ```
+
+Open the frontend at **http://localhost:3000**. Rails and Python are internal
+services behind the frontend proxy; Python listens on container port 8001.
+Compose starts PostgreSQL with pgvector, Redis, migration services, the APIs,
+the analysis worker and the ingestion scheduler. Migrations run before their
+dependent services start.
+
+Configure `LLM_PROVIDER`, `LLM_API_KEY` and `LLM_MODEL` for analysis, plus
+`EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY` and the embedding model settings for RAG.
+The root `.env.example` lists the supported configuration fields.
 
 Compose defaults to `ENVIRONMENT=development` for Python and Rails, including
 Rails migrations. For production, set `ENVIRONMENT=production`, real
@@ -63,6 +73,76 @@ when migrations boot Rails as well as when the API starts.
 Local Compose builds include Rails development gems. For production builds,
 also set `RAILS_BUNDLE_WITHOUT=development:test` to exclude development and test
 gems. Rebuild the Rails images after changing this setting.
+
+## Market Data Providers
+
+Active Stock ingestion uses:
+
+| Provider | Data | Root `.env` settings |
+|----------|------|----------------------|
+| Twelve Data | Daily OHLCV history | `TWELVE_DATA_API_KEY` |
+| Finnhub | Quotes, company profiles and news | `FINNHUB_API_KEY` |
+| SEC | US USD financial statements | `SEC_USER_AGENT` with your organization and actual contact email |
+| FMP | Optional fallback and market movers | `FMP_API_KEY`, subject to account entitlement |
+
+Massive is no longer used by active provider routing. Its adapter and historical
+source labels remain for compatibility. Existing articles labelled Massive can
+still appear in retrieved evidence.
+
+Twelve Data defaults to 8 credits per minute and 800 per day. Redis shares quota
+reservations across workers; exhausted budgets defer remaining history work.
+Provider coverage depends on the account tier. Missing financial inputs are
+reported rather than treated as complete data. See the
+[provider migration guide](intelligence-platform-stock/docs/PROVIDER_MIGRATION.md)
+for coverage limits and migration 0021 requirements on existing databases.
+
+## AI Analysis
+
+New to stock terminology? Read [Stock and finance terms in plain English](intelligence-platform-stock/docs/STOCK_TERMS_IN_PLAIN_ENGLISH.md) for the app's scores, financial ratios, indicators, AI explanations and backtesting concepts.
+
+The framework reads stored company snapshots during a deep dive. Vendor fetching
+is handled separately by ingestion workers. The framework uses deterministic
+Python scoring; the LLM supplies the explanation. API jobs and scheduled analyses always run the framework. No engine selector is required.
+Optional news, fundamentals, technical and macro sections remain supported.
+
+The **Opportunities** page uses each company's latest completed deep dive visible
+to the signed-in user, with screening scores for companies awaiting analysis.
+Its score and deep-dive link refer to the same analysis. Investment score and
+risk score are separate measures.
+
+Score components are bounded to 0–100. Financial-data coverage checks usable
+fields and reporting freshness, and identifies components using the neutral
+50 fallback. Score confidence is capped at 95%, or 50% when a financial component
+uses fallback inputs; it describes evidence coverage, not the probability of
+investment success. AI self-assessment remains separate.
+
+Recent news and retrieved passages have citation IDs. Unsupported causes are
+excluded and shown as evidence limitations. Citation checks establish plausible
+textual support, not independent factual verification. Run a new deep dive to
+apply changed analysis logic to a company; historical results retain their
+original snapshots.
+
+### Applying configuration and code changes
+
+Changing runtime values in root `.env` does **not** require rebuilding images. Recreate the
+services that consume the changed settings; a container restart alone does not
+reload `env_file` values:
+
+```bash
+docker compose up -d --no-deps --force-recreate python worker scheduler
+```
+
+Rebuild for Python or frontend code changes. The Python API uses a development
+bind mount, but worker and scheduler code is baked into their images:
+
+```bash
+docker compose up -d --build python worker scheduler frontend
+```
+
+If gateway settings change, recreate `rails` as well. Changes to dependencies or
+build arguments, including frontend `VITE_REFRESH_*` settings, require rebuilding
+the affected images. Let active analyses
+finish before recreating their worker.
 
 ## Domain Enablement
 
@@ -81,7 +161,28 @@ the `DomainModule` protocol (`app/intelligence/contracts.py`), add it to
 
 ```bash
 cd intelligence-platform-stock
-.venv/bin/python -m pytest -q
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+DEBUG=false REDIS_CACHE_ENABLED=false .venv/bin/python -m pytest tests -q
+```
+
+Keep the Compose Redis service running for the rate-limit integration test.
+Tests use mocked providers and recorded LLM output; they do not establish live
+provider entitlement or factual accuracy of model-generated prose.
+
+Frontend checks:
+
+```bash
+cd intelligence-platform-frontend
+npm ci
+npm test
+npm run build
+```
+
+Read-only comparison of framework contexts and persisted snapshot readers against the local database:
+
+```bash
+docker compose exec -T python python scripts/verify_framework_context.py
 ```
 
 ## Version Labels
@@ -108,6 +209,7 @@ Version identity is deliberately disambiguated (no single conflated
 
 ## Documentation
 
-- `intelligence-platform-stock/docs/INTELLIGENCE_PLATFORM_ARCHITECTURE_V3.md` — authoritative architecture spec
-- `intelligence-platform-stock/docs/CHECKLIST.md` — gated completion roadmap (Gate 0–6)
-- `intelligence-platform-stock/docs/Audit_result.md` — Phase 12 audit results
+- [Architecture V3](intelligence-platform-stock/docs/INTELLIGENCE_PLATFORM_ARCHITECTURE_V3.md) — architecture specification
+- [Framework analysis path](intelligence-platform-stock/docs/FRAMEWORK_ANALYSIS_PATH.md) — engine selection, persistence and quality safeguards
+- [Provider migration](intelligence-platform-stock/docs/PROVIDER_MIGRATION.md) — provider setup, quotas and coverage limits
+- [Implementation plan](intelligence-platform-stock/docs/PLAN.md) — rollout and completion gates

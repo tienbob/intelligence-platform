@@ -114,7 +114,8 @@ class EvidenceAttributor:
         Return shape (legacy-compatible):
             {evidence_sources, source_count, source_types}
         """
-        evidence_sources = self.register_sources(rag_context)
+        self.register_sources(rag_context)
+        evidence_sources = list(self.source_registry.values())
         return {
             "evidence_sources": evidence_sources,
             "source_count": len(evidence_sources),
@@ -146,14 +147,24 @@ class EvidenceAttributor:
         if len(claim_tokens) < 2:
             return evidence_ids
         kept: list[str] = []
+        combined_tokens: set[str] = set()
+        has_uncheckable_content = False
         for eid in evidence_ids:
             source = self.source_registry.get(eid)
             if source is None:
                 continue  # unknown ids are the validator's concern
             content_tokens = _content_tokens(source.get("content") or "")
             if len(content_tokens) < 10:
+                has_uncheckable_content = True
                 kept.append(eid)  # too little content to judge
                 continue
+            # Shared company/product names alone are not enough to support
+            # a detailed claim. Require coverage of its distinctive words.
             if len(claim_tokens & content_tokens) >= 2:
                 kept.append(eid)
+                combined_tokens.update(content_tokens)
+        # Several passages may jointly support a cause. Judge coverage across
+        # that set, while still rejecting individually unrelated passages.
+        if not has_uncheckable_content and len(claim_tokens & combined_tokens) < max(2, len(claim_tokens) * 0.5):
+            return []
         return kept

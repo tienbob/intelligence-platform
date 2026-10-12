@@ -57,6 +57,11 @@ class StockDomain:
             "twelve_data": TwelveDataProvider(),
         }
 
+    def get_ingestion_providers(self) -> dict[str, Any]:
+        """Analysis reads worker-persisted data; it never re-fetches vendors."""
+        from app.domains.stock.providers.persisted import PersistedStockProvider
+        return {"stock_database": PersistedStockProvider()}
+
     # ── Normalizers ─────────────────────────────────────────────
 
     def get_normalizers(self) -> dict[str, Any]:
@@ -207,6 +212,35 @@ class StockDomain:
         return registry
 
     # ── Evidence attribution (optional, §32) ─────────────────────
+
+    @staticmethod
+    def excluded_sections(parameters):
+        sections = {"include_news": ("news_snapshot", "event_snapshot"),
+                    "include_fundamentals": ("fundamental_snapshot",),
+                    "include_technical": ("technical_snapshot", "anomaly_snapshot"),
+                    "include_macro": ("macro_snapshot",)}
+        return {section for flag, names in sections.items() if not parameters.get(flag, True) for section in names}
+
+    def filter_analysis_context(self, context, parameters):
+        excluded = self.excluded_sections(parameters)
+        context.domain_snapshots = {k: v for k, v in context.domain_snapshots.items() if k not in excluded}
+        context.observations = [o for o in context.observations if o.kind not in excluded]
+        context.metadata["missing_snapshots"] = [k for k in context.metadata.get("missing_snapshots", []) if k not in excluded]
+        context.metadata["excluded_snapshots"] = sorted(excluded)
+        return context
+
+    @staticmethod
+    def filter_rag_context(rag, parameters):
+        excluded = set()
+        if not parameters.get("include_news", True):
+            excluded.update(("news", "events"))
+        if not parameters.get("include_fundamentals", True):
+            excluded.add("filings")
+        return {k: v for k, v in rag.items() if k not in excluded}
+
+    def get_llm_context(self, context):
+        """Snapshots already contain the persisted observation/evidence values."""
+        return {key: value for key, value in context.items() if key not in ("observations", "evidence")}
 
     def get_evidence_attributor(self, context):
         """Supply claim→source attribution to the generic LLM stage.

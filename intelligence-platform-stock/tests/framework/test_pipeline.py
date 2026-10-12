@@ -527,3 +527,38 @@ def test_pipeline_skips_attributor_when_domain_omits_it():
     asyncio.run(pipe.run(_request()))
     assert "evidence_attributor" not in (llm.last_kwargs or {})
 
+
+
+def test_progress_callback_observes_pipeline_stage_order():
+    seen = []
+    async def stage(name): seen.append(name)
+    pipe = IntelligencePipeline(registry=_FakeRegistry({'fake': _FakeDomain()}),
+                                entity_resolution=_FakeEntityResolution(),
+                                llm_service=_FakeLLM(), stage_callback=stage)
+    result = asyncio.run(pipe.run(_request()))
+    assert result.status == 'completed'
+    assert seen == list(result.metadata['stages'])
+    assert seen.index('context') < seen.index('llm') < seen.index('scoring')
+
+
+def test_rag_with_empty_buckets_is_degraded():
+    class EmptyRag:
+        async def retrieve_context(self, *args, **kwargs): return {'news': [], 'filings': []}
+    result = asyncio.run(_pipeline(_FakeDomain(), rag=EmptyRag(), llm=_FakeLLM()).run(_request()))
+    assert result.status == 'completed'
+    assert result.metadata['stages']['rag'] == 'degraded'
+
+
+def test_domain_analysis_provider_catalog_preserves_typed_observations():
+    from app.shared.entities import Observation
+    from datetime import datetime, timezone
+    class PersistedProvider:
+        async def fetch(self, ref):
+            return [Observation(ref, datetime.now(timezone.utc), source='database', kind='metrics', data={'metric': 'revenue', 'value': 100})]
+    domain = _FakeDomain()
+    domain.get_ingestion_providers = lambda: {'database': PersistedProvider()}
+    result = asyncio.run(_pipeline(domain, llm=_FakeLLM()).run(_request()))
+    assert result.status == 'completed'
+    assert len(result.evidence) == 1
+    assert result.evidence[0].source_name == 'database'
+    assert result.evidence[0].value == 100
