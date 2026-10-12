@@ -279,6 +279,8 @@ A **portfolio** is a collection of investments. Portfolio calculations and backt
 
 Before comparing backtests, check their dates, price coverage, benchmark, strategy rules, costs and data assumptions. An attractive historical result is not a prediction. Stored data coverage and missing historical snapshots can limit what a simulation establishes.
 
+Automated daily snapshots save prices and scores at the first successful capture of each UTC day. Scheduler restarts and simultaneous scheduler runs reuse the existing day's capture rather than create another. Manual snapshots can still capture different times that day. Older duplicate snapshots remain available because saved backtests may reference them.
+
 The backtest page's trade win rate counts SELL executions above the position's average cost. Breakeven is not a win, and the count is not weighted by shares or profit. One large loss can outweigh many small wins. The page describes the simulation as assuming no fees or slippage unless documented otherwise.
 
 ## 9. A simple way to read a deep dive
