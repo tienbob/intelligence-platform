@@ -190,6 +190,8 @@ class Analysis(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_analyses_completed_latest", "company_id", desc("created_at"), desc("id"),
               postgresql_where=text("status = 'completed'"), postgresql_include=["user_id"]),
+        Index("ix_analyses_completed_day", "company_id", desc("completed_at"), desc("id"),
+              postgresql_where=text("status = 'completed'"), postgresql_include=["user_id"]),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -201,6 +203,7 @@ class Analysis(Base, TimestampMixin):
     analysis_type: Mapped[str] = mapped_column(String(50), nullable=False)
     analysis_version: Mapped[str] = mapped_column(String(20), default="1.0")
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|completed|failed
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Snapshots
     market_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

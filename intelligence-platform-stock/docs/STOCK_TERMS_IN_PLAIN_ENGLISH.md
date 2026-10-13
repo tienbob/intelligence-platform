@@ -23,7 +23,7 @@ A completed analysis means the job finished. It does not mean every financial fi
 | Dashboard | A summary of activity and available information. |
 | Companies / Company detail | The businesses we track and their stored information. |
 | Market | Price and market information. Check the data date. |
-| Opportunities | Companies ranked for further investigation. The score uses your latest visible completed deep dive when available; otherwise it uses screening results. |
+| Opportunities | Companies ranked for further investigation. The score uses your latest visible deep dive completed today (UTC); otherwise it uses screening results. Older deep dives remain in AI Analysis. |
 | AI Analysis / Deep dive | A saved research explanation with scores, supporting sources and limitations. |
 | News | Articles associated with companies. |
 | Events | Things that happened or may happen and could affect a company. |

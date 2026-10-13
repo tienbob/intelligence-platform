@@ -3,6 +3,7 @@ Investment opportunities API endpoints (Section 48).
 """
 
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import desc, func, select, true
@@ -20,6 +21,10 @@ from app.domains.stock.schemas.analysis import (
 )
 
 router = APIRouter(prefix="/investments", tags=["investments"])
+
+
+def completed_today(day_start):
+    return (Analysis.completed_at >= day_start) & (Analysis.completed_at < day_start + timedelta(days=1))
 
 # Screening-model weights — mirrors InvestmentScoringEngine defaults so the
 # breakdown bars reflect how the score was actually computed.
@@ -44,12 +49,13 @@ async def get_investment_opportunities(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """Rank by the latest visible completed deep dive, falling back to screening.
+    """Rank by today's latest visible completed deep dive, otherwise screening.
 
     Visibility is applied before selecting each company's latest analysis.
     Score filtering and LIMIT use the same effective score shown in the UI.
     """
     actor = get_actor(request)
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     latest_score = (
         select(InvestmentScore).where(InvestmentScore.company_id == Company.id)
         .order_by(InvestmentScore.timestamp.desc(), InvestmentScore.id.desc())
@@ -57,8 +63,9 @@ async def get_investment_opportunities(
     )
     latest_analysis = (
         select(Analysis).where(Analysis.company_id == Company.id, Analysis.status == "completed")
+        .where(completed_today(day_start))
         .where(visible_to_actor(Analysis.user_id, actor))
-        .order_by(Analysis.created_at.desc(), Analysis.id.desc())
+        .order_by(Analysis.completed_at.desc(), Analysis.id.desc())
         .limit(1).correlate(Company).lateral("latest_analysis")
     )
     score_row = aliased(InvestmentScore, latest_score)
@@ -131,11 +138,11 @@ def _opportunity_from_rows(score, company, analysis, risk):
         recommendation=(snapshot.get("recommendation") or "NEUTRAL") if use_analysis else score.recommendation or "NEUTRAL",
         analysis_id=analysis.analysis_id if analysis else None,
         analysis_status=analysis.status if analysis else None,
-        analysis_timestamp=analysis.created_at if analysis else None,
+        analysis_timestamp=getattr(analysis, "completed_at", None) or analysis.created_at if analysis else None,
         analysis_score=analysis.investment_score if analysis else None,
         components=[ScoreComponent(label=label, value=component(attr), weight=weight)
                     for label, attr, weight in _COMPONENT_WEIGHTS],
         scoring_model=snapshot.get("scoring_model") if use_analysis else score.scoring_model,
         scoring_version=snapshot.get("scoring_version") if use_analysis else score.scoring_version,
-        score_timestamp=analysis.created_at if use_analysis else score.timestamp,
+        score_timestamp=(getattr(analysis, "completed_at", None) or analysis.created_at) if use_analysis else score.timestamp,
     )

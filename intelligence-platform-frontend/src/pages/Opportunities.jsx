@@ -214,7 +214,7 @@ export default function Opportunities() {
           <p><strong>Investment score:</strong> {scoreHelp.investment}</p>
           <p><strong>Risk:</strong> {scoreHelp.risk}</p>
         </div>
-        <p className="text-xs text-on-surface-variant mt-3">Expand a company to inspect the breakdown, coverage and next research step.</p>
+        <p className="text-xs text-on-surface-variant mt-3">Deep dives are used only on the UTC day they complete. Older results stay in AI Analysis; this page falls back to screening. Expand a company for details.</p>
       </details>
       {userId != null && <section className="card mb-4" aria-label="Personal company preferences">
         <div className="flex flex-wrap justify-between items-center gap-3">

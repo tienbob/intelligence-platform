@@ -107,7 +107,7 @@ is handled separately by ingestion workers. The framework uses deterministic
 Python scoring; the LLM supplies the explanation. API jobs and scheduled analyses always run the framework. No engine selector is required.
 Optional news, fundamentals, technical and macro sections remain supported.
 
-The **Opportunities** page uses each company's latest completed deep dive visible
+The **Opportunities** page uses each company's latest deep dive completed today (UTC) and visible
 to the signed-in user, with screening scores for companies awaiting analysis.
 Its score and deep-dive link refer to the same analysis. Investment score and
 risk score are separate measures.
