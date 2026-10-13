@@ -157,6 +157,7 @@ class InvestmentOpportunity(BaseModel):
     ticker: str
     score: float
     score_source: str = "screening"
+    data_quality: Optional[dict[str, Any]] = None
     screening_score: Optional[float] = None
     # None = no risk metric recorded; render "—" rather than inventing a value.
     risk_score: Optional[float] = None

@@ -47,3 +47,32 @@ def test_zero_deep_dive_score_is_selected_without_screening_row():
     assert row.score == 0
     assert row.score_source == 'analysis'
     assert row.screening_score is None
+
+
+def test_coverage_follows_selected_score_without_borrowing_screening_data():
+    score = screening()
+    score.validation_issues = {'data_quality': {'financial_inputs': {'reporting_period': '2026-06-30'}}}
+    deep_dive = analysis()
+    assert _opportunity_from_rows(score, COMPANY, deep_dive, None).data_quality is None
+    deep_dive.llm_analysis['_score_snapshot']['validation_issues'] = {
+        'data_quality': {'financial_inputs': {'reporting_period': '2025-12-31'}}}
+    assert _opportunity_from_rows(score, COMPANY, deep_dive, None).data_quality['financial_inputs']['reporting_period'] == '2025-12-31'
+    assert _opportunity_from_rows(score, COMPANY, None, None).data_quality['financial_inputs']['reporting_period'] == '2026-06-30'
+
+
+def test_ticker_search_normalizes_literal_text_and_preserves_pagination(monkeypatch):
+    import asyncio
+    from app.domains.stock.api import investments
+    from sqlalchemy.dialects import postgresql
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(investments, 'get_actor', lambda request: None)
+    monkeypatch.setattr(investments, 'visible_to_actor', lambda column, actor: column == 1)
+    db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])))
+    asyncio.run(investments.get_investment_opportunities(None, min_score=0, sector=None,
+        ticker=' aa%_ ', limit=5, offset=10, db=db))
+    statement = db.execute.call_args.args[0]
+    compiled = statement.compile(dialect=postgresql.dialect())
+    assert 'AA/%/_' in compiled.params.values()
+    assert 'LIKE' in str(compiled)
+    assert statement._limit_clause.value == 5
+    assert statement._offset_clause.value == 10

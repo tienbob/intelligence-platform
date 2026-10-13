@@ -7,6 +7,7 @@ import MetricTile from '../components/MetricTile';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
 import { REFRESH_ANALYSIS_DETAIL_MS } from '../config';
+import { scoreHelp, financialLimitations } from '../services/researchSummary';
 
 export default function AnalysisDetail() {
   const { analysisId } = useParams();
@@ -119,6 +120,7 @@ export default function AnalysisDetail() {
   const analysis = data.analysis || {};
   const recommendation = data.recommendation;
   const cb = data.confidence_breakdown;
+  const limitations = financialLimitations(data);
   // Owner can cancel/delete from the detail page; system rows are read-only
   // for regular users (mirrors can_manage on the jobs list).
   const canManage = !!data.can_manage;
@@ -197,30 +199,50 @@ export default function AnalysisDetail() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-gutter mb-6">
         <MetricTile
           label="Investment Score"
+          description={scoreHelp.investment}
           value={data.investment_score != null ? data.investment_score.toFixed(1) : '—'}
           icon="trending_up"
           color={data.investment_score > 60 ? 'tertiary' : data.investment_score > 30 ? 'secondary' : 'error'}
         />
         <MetricTile
           label="Risk Score"
+          description={scoreHelp.risk}
           value={data.risk_score != null ? data.risk_score.toFixed(0) : '—'}
           icon="shield"
           color={data.risk_score > 60 ? 'error' : data.risk_score > 30 ? 'secondary' : 'tertiary'}
         />
         <MetricTile
           label="Data Confidence"
+          description={scoreHelp.confidence}
           value={data.confidence != null ? `${(data.confidence * 100).toFixed(0)}%` : '—'}
           icon="verified"
           color="secondary"
         />
         <MetricTile
           label="Overall Confidence"
+          description={scoreHelp.overall}
           value={cb?.overall != null ? `${(cb.overall * 100).toFixed(0)}%` : '—'}
           icon="fact_check"
           color="tertiary"
         />
       </div>
 
+      {data.status === 'completed' && <section className="card mb-6" aria-label="Research overview">
+        <h2 className="text-lg font-semibold mb-3">Your research overview</h2>
+        <p className="text-xs text-on-surface-variant mb-4">Analysis saved: {data.created_at ? new Date(data.created_at).toLocaleString() : 'Date unavailable'}. This is a saved result; underlying inputs may be older.</p>
+        <p className="text-xs text-on-surface-variant mb-4">Financial reporting period: {data.data_quality?.financial_inputs?.reporting_period || 'Unavailable'}. A recent analysis date does not mean the financial report is recent.</p>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div><h3 className="font-semibold mb-2">Why it looks interesting</h3>
+            {analysis.bull_case?.length ? <ul className="list-disc pl-5 text-sm space-y-2">{analysis.bull_case.slice(0, 3).map((point, i) => <li key={i}>{point}</li>)}</ul> : <p className="text-sm">No favorable case was provided.</p>}
+          </div>
+          <div><h3 className="font-semibold mb-2">What could go wrong</h3>
+            {analysis.bear_case?.length ? <ul className="list-disc pl-5 text-sm space-y-2">{analysis.bear_case.slice(0, 3).map((point, i) => <li key={i}>{point}</li>)}</ul> : <p className="text-sm">No unfavorable case was provided. That does not establish low risk.</p>}
+          </div>
+          <div><h3 className="font-semibold mb-2">What information is missing</h3>
+            {limitations.length ? <ul className="list-disc pl-5 text-sm space-y-2">{limitations.map(message => <li key={message}>{message}</li>)}</ul> : <p className="text-sm">No missing financial inputs or evidence warnings were reported. Check source dates and detailed coverage below.</p>}
+          </div>
+        </div>
+      </section>}
       <div className="grid grid-cols-12 gap-gutter">
         {/* LLM Analysis (Span 8) */}
         <div className="col-span-12 lg:col-span-8 flex flex-col gap-gutter">

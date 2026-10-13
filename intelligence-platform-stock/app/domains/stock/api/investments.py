@@ -39,7 +39,9 @@ async def get_investment_opportunities(
     request: Request,
     min_score: float = Query(default=0, ge=0, le=100),
     sector: str | None = Query(default=None),
+    ticker: str | None = Query(default=None, max_length=32),
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """Rank by the latest visible completed deep dive, falling back to screening.
@@ -71,7 +73,9 @@ async def get_investment_opportunities(
     )
     if sector:
         query = query.where(Company.sector == sector)
-    result = await db.execute(query.order_by(effective_score.desc(), Company.id).limit(limit))
+    if ticker and ticker.strip():
+        query = query.where(Company.ticker.contains(ticker.strip().upper(), autoescape=True))
+    result = await db.execute(query.order_by(effective_score.desc(), Company.id).offset(offset).limit(limit))
     rows = result.all()
     company_ids = [company.id for _, company, _ in rows]
 
@@ -118,6 +122,8 @@ def _opportunity_from_rows(score, company, analysis, risk):
         ticker=company.ticker,
         score=analysis.investment_score if use_analysis else score.overall_score,
         score_source="analysis" if use_analysis else "screening",
+        data_quality=((snapshot.get("validation_issues") or {}) if use_analysis else
+                      (getattr(score, "validation_issues", None) or {})).get("data_quality"),
         screening_score=score.overall_score if score is not None else None,
         risk_score=analysis.risk_score if use_analysis else risk.risk_score if risk is not None else None,
         volatility=(analysis.risk_snapshot or {}).get("volatility") if use_analysis else risk.volatility if risk is not None else None,
