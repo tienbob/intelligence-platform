@@ -73,18 +73,18 @@ async function request(url, options = {}, retried = false) {
 // an HTML 404 page to the client.
 
 // Stocks
-export const getStockQuote = (ticker) => request(`/stocks/${ticker}`);
+export const getStockQuote = (ticker, options = {}) => request(`/stocks/${ticker}`, options);
 export const getStockPrices = (ticker, params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/stocks/${ticker}/prices${qs ? `?${qs}` : ''}`);
 };
 
 // Companies
-export const getCompanies = (params = {}) => {
+export const getCompanies = (params = {}, options = {}) => {
   const qs = new URLSearchParams(params).toString();
-  return request(`/companies/${qs ? `?${qs}` : ''}`);
+  return request(`/companies/${qs ? `?${qs}` : ''}`, options);
 };
-export const getCompany = (ticker) => request(`/companies/${ticker}`);
+export const getCompany = (ticker, options = {}) => request(`/companies/${ticker}`, options);
 
 // Prices
 export const getPrices = (ticker, params = {}) => {

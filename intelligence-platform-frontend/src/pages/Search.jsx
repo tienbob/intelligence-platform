@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
-import { getCompanies, getStockQuote } from '../services/api';
+import { getCompanies, getCompany, getStockQuote } from '../services/api';
 import { startPolling } from '../services/polling';
 import { createCompanySearch } from '../services/companySearch';
 
@@ -35,6 +35,7 @@ export default function Search() {
 
     return startPolling(createCompanySearch(term, {
       getCompanies,
+      getCompany,
       getStockQuote,
       update: (state) => {
         setResults(state.results || null);
@@ -42,7 +43,7 @@ export default function Search() {
         setImporting(Boolean(state.importing));
         setSearching(false);
       },
-    }), 30000);
+    }), 1000);
   }, [initialQuery, attempt]);
 
   return (

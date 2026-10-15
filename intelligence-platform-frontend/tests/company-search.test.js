@@ -9,10 +9,10 @@ test('pending import survives a gateway failure and automatically displays the c
   let calls = 0;
   const company = { ticker: 'AMD', name: 'Advanced Micro Devices' };
   const poll = createCompanySearch('AMD', {
-    getCompanies: async () => {
-      calls++;
-      if (calls === 2) throw Object.assign(new Error('Gateway timeout'), { status: 504 });
-      return { companies: calls === 3 ? [company] : [] };
+    getCompanies: async () => ({ companies: [] }),
+    getCompany: async () => {
+      if (++calls === 1) throw Object.assign(new Error('Gateway timeout'), { status: 504 });
+      return company;
     },
     getStockQuote: async () => { throw pending(); },
     update: state => states.push(state),
@@ -59,13 +59,50 @@ test('failed ingestion replaces importing with its failure and stops polling', a
   const message = 'Import failed for MVDA. Check the ticker symbol.';
   const poll = createCompanySearch('MVDA', {
     getCompanies: async () => ({ companies: [] }),
-    getStockQuote: async () => {
-      if (++calls === 1) throw pending();
-      throw Object.assign(new Error(message), { status: 409 });
-    },
+    getStockQuote: async () => { calls++; throw pending(); },
+    getCompany: async () => { throw Object.assign(new Error(message), { status: 409 }); },
     update: state => states.push(state),
   });
   assert.equal(await poll(() => true), true);
   assert.equal(await poll(() => true), false);
   assert.deepEqual(states, [{ importing: true }, { error: message }]);
+});
+
+test('saved company appears without another list search or quote request', async () => {
+  const states = [];
+  let searches = 0;
+  let quotes = 0;
+  const company = { ticker: 'AAPL', name: 'Apple' };
+  const poll = createCompanySearch('aapl', {
+    getCompanies: async () => { searches++; return { companies: [] }; },
+    getStockQuote: async () => { quotes++; throw pending(); },
+    getCompany: async (ticker, options) => {
+      assert.equal(ticker, 'AAPL');
+      assert.equal(options.cache, 'no-store');
+      assert.ok(options.signal instanceof AbortSignal);
+      return company;
+    },
+    update: state => states.push(state),
+  });
+  assert.equal(await poll(() => true), true);
+  assert.equal(await poll(() => true), false);
+  assert.equal(searches, 1);
+  assert.equal(quotes, 1);
+  assert.deepEqual(states.at(-1), { results: { type: 'companies', data: [company] } });
+});
+
+test('repeated timeouts cannot leave the UI claiming importing forever', async () => {
+  const states = [];
+  let time = 0;
+  const poll = createCompanySearch('AAPL', {
+    now: () => time,
+    getCompanies: async () => ({ companies: [] }),
+    getStockQuote: async () => { throw pending(); },
+    getCompany: async () => { throw new DOMException('Timed out', 'TimeoutError'); },
+    update: state => states.push(state),
+  });
+  assert.equal(await poll(() => true), true);
+  time = 300000;
+  assert.equal(await poll(() => true), false);
+  assert.match(states.at(-1).error, /couldn’t confirm/);
 });
