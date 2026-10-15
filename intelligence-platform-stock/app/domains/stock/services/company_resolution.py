@@ -65,8 +65,8 @@ async def _reserve_ingestion(db: AsyncSession, symbol: str) -> str:
 
     Cross-process coalescing: the insert races on the unique
     ``(scope, key)`` constraint, so concurrent requests never each start their
-    own provider pipeline. A terminal (completed/failed) job is re-queued so a
-    ticker that was removed again can be re-ingested.
+    own provider pipeline. Failed jobs are reported to the caller rather than
+    re-queued by polling. Completed jobs can ingest a removed ticker again.
     """
     scope, key = f"ticker:{symbol}", INGESTION_KIND
     fingerprint = hashlib.sha256(
@@ -102,7 +102,15 @@ async def _reserve_ingestion(db: AsyncSession, symbol: str) -> str:
             select(WorkJob).where(WorkJob.scope == scope, WorkJob.key == key)
         )
     ).scalar_one()
-    if existing.status in {"completed", "failed"}:
+    if existing.status == "failed":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Import failed for {symbol}. Check the ticker symbol. "
+                "The data provider may not support it or may be unavailable."
+            ),
+        )
+    if existing.status == "completed":
         existing.status = "queued"
         existing.fingerprint = fingerprint
         await db.commit()

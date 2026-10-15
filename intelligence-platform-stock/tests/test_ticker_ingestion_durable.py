@@ -255,3 +255,14 @@ def test_optional_failure_recovers_transaction_before_reading_company(monkeypatc
     monkeypatch.setattr(FundamentalAnalysisEngine, 'calculate_and_store', successful)
     assert asyncio.run(resolve.ingest_missing_ticker('AMD', db)) is company
     assert db.rollbacks == 1
+
+
+def test_failed_ingestion_is_reported_without_requeuing_on_poll():
+    job = SimpleNamespace(id='failed-import', status='failed')
+    db = ScriptedSession([None, None, job])
+    with pytest.raises(resolve.HTTPException) as error:
+        asyncio.run(resolve.get_or_schedule_missing('MVDA', db))
+    assert error.value.status_code == 409
+    assert 'Import failed for MVDA' in error.value.detail
+    assert job.status == 'failed'
+    assert db.commits == 0

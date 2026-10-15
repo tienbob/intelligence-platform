@@ -18,6 +18,10 @@ export function createCompanySearch(term, { getCompanies, getStockQuote, update 
       return false;
     } catch (error) {
       if (!active()) return false;
+      if (error.status === 409 && /^Import failed for /i.test(error.message)) {
+        update({ error: error.message });
+        return false;
+      }
       if (error.status === 404 && /ingestion has started/i.test(error.message)) {
         importing = true;
       } else if (!importing || (error.status >= 400 && error.status < 500)) {

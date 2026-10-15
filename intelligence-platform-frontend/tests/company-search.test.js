@@ -52,3 +52,20 @@ test('an ordinary missing ticker is an error, not a perpetual import', async () 
   assert.equal(await poll(() => true), false);
   assert.ok(states[0].error);
 });
+
+test('failed ingestion replaces importing with its failure and stops polling', async () => {
+  const states = [];
+  let calls = 0;
+  const message = 'Import failed for MVDA. Check the ticker symbol.';
+  const poll = createCompanySearch('MVDA', {
+    getCompanies: async () => ({ companies: [] }),
+    getStockQuote: async () => {
+      if (++calls === 1) throw pending();
+      throw Object.assign(new Error(message), { status: 409 });
+    },
+    update: state => states.push(state),
+  });
+  assert.equal(await poll(() => true), true);
+  assert.equal(await poll(() => true), false);
+  assert.deepEqual(states, [{ importing: true }, { error: message }]);
+});
