@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getCompanies, getStockQuote } from '../services/api';
+import { startPolling } from '../services/polling';
+import { createCompanySearch } from '../services/companySearch';
 
 export default function Search() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -23,8 +25,6 @@ export default function Search() {
   }
 
   useEffect(() => {
-    let active = true;
-    let retryTimer;
     const term = initialQuery.trim();
     setQuery(initialQuery);
     setResults(null);
@@ -33,46 +33,16 @@ export default function Search() {
     setSearching(Boolean(term));
     if (!term) return;
 
-    async function search() {
-      try {
-        // Search the whole tracked universe on the server before trying an
-        // untracked ticker. Company names should never trigger ingestion.
-        const companies = await getCompanies({ q: term, limit: 100 });
-        if (!active) return;
-        if (companies?.companies?.length) {
-          setImporting(false);
-          setResults({ type: 'companies', data: companies.companies });
-        } else if (/^[A-Za-z0-9.^-]{1,12}$/.test(term)) {
-          try {
-            const quote = await getStockQuote(term.toUpperCase());
-            if (active) {
-              setImporting(false);
-              setResults({ type: 'stock', data: quote });
-            }
-          } catch (err) {
-            if (err.status === 404 && /ingestion has started/i.test(err.message)) {
-              if (active) {
-                setImporting(true);
-                retryTimer = setTimeout(search, 30000);
-              }
-              return;
-            }
-            throw err;
-          }
-        } else {
-          setError(`No company found for "${term}".`);
-        }
-      } catch {
-        if (active) {
-          setImporting(false);
-          setError('Search could not be completed. Try again or check the ticker.');
-        }
-      } finally {
-        if (active) setSearching(false);
-      }
-    }
-    search();
-    return () => { active = false; clearTimeout(retryTimer); };
+    return startPolling(createCompanySearch(term, {
+      getCompanies,
+      getStockQuote,
+      update: (state) => {
+        setResults(state.results || null);
+        setError(state.error || null);
+        setImporting(Boolean(state.importing));
+        setSearching(false);
+      },
+    }), 30000);
   }, [initialQuery, attempt]);
 
   return (

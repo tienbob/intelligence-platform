@@ -160,14 +160,16 @@ async def ingest_missing_ticker(
             await fundamentals.ingest_company_profile(ticker)
             await fundamentals.ingest_fmp_statements(ticker)
         except Exception:
-            pass  # fundamentals are best-effort
+            logger.exception("Optional fundamentals ingestion failed for %s", ticker)
+            await db.rollback()
 
         # 3. Ingest recent news
         try:
             news = NewsIngestion(db)
             await news.ingest_company_news(ticker, limit=50)
         except Exception:
-            pass  # news is best-effort
+            logger.exception("Optional news ingestion failed for %s", ticker)
+            await db.rollback()
 
         # 3b. Detect market events from the ingested news so the Market
         # Overview "Major Events" panel has data without waiting for the
@@ -182,7 +184,8 @@ async def ingest_missing_ticker(
                 event_engine = EventIntelligenceEngine(db)
                 await event_engine.detect_events_from_news(company.id, hours=168)
         except Exception:
-            pass  # event detection is best-effort
+            logger.exception("Optional event detection ingestion failed for %s", ticker)
+            await db.rollback()
 
         # 4. Compute derived data (technical indicators + financial metrics)
         try:
@@ -196,11 +199,22 @@ async def ingest_missing_ticker(
                 await TechnicalAnalysisEngine(db).calculate_indicators(company.id)
                 await FundamentalAnalysisEngine(db).calculate_and_store(company.id)
         except Exception:
-            pass  # derived data is best-effort
+            logger.exception("Optional derived data ingestion failed for %s", ticker)
+            await db.rollback()
 
         result = await db.execute(
             select(Company).where(Company.ticker == ticker.upper())
         )
         return result.scalar_one_or_none()
     except Exception:
-        return None
+        logger.exception("Ticker ingestion failed for %s; checking persisted company", ticker)
+        await db.rollback()
+        # Earlier stages commit independently. Preserve that usable company
+        # instead of reporting a missing record after a later-stage failure.
+        result = await db.execute(
+            select(Company).where(Company.ticker == ticker.upper())
+        )
+        company = result.scalar_one_or_none()
+        if company is None:
+            raise
+        return company

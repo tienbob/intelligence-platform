@@ -178,3 +178,80 @@ def test_pending_response_is_not_reported_as_missing_company():
     assert error.status_code == 404
     assert error.headers == {"Retry-After": "30"}
     assert "not tracked yet" in error.detail
+
+
+def test_pipeline_preserves_company_committed_before_later_failure(monkeypatch):
+    from app.domains.stock.ingestion.market import MarketDataIngestion
+
+    async def failed_stage(self, *args):
+        raise RuntimeError('late provider failure')
+
+    monkeypatch.setattr(MarketDataIngestion, 'ingest_historical_prices', failed_stage)
+    company = SimpleNamespace(id=42, ticker='AMD')
+
+    class RecoverySession(ScriptedSession):
+        rollbacks = 0
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    db = RecoverySession([company])
+    assert asyncio.run(resolve.ingest_missing_ticker('AMD', db)) is company
+    assert db.rollbacks == 1
+
+
+def test_pipeline_propagates_original_failure_when_nothing_persisted(monkeypatch):
+    from app.domains.stock.ingestion.market import MarketDataIngestion
+
+    async def failed_stage(self, *args):
+        raise RuntimeError('provider unavailable')
+
+    monkeypatch.setattr(MarketDataIngestion, 'ingest_historical_prices', failed_stage)
+
+    class RecoverySession(ScriptedSession):
+        async def rollback(self):
+            pass
+
+    with pytest.raises(RuntimeError, match='provider unavailable'):
+        asyncio.run(resolve.ingest_missing_ticker('AMD', RecoverySession([None])))
+
+
+def test_optional_failure_recovers_transaction_before_reading_company(monkeypatch):
+    from app.domains.stock.ingestion.market import MarketDataIngestion
+    from app.domains.stock.ingestion.fundamentals import FundamentalsIngestion
+    from app.domains.stock.ingestion.news import NewsIngestion
+    from app.domains.stock.scoring.event_detection import EventIntelligenceEngine
+    from app.domains.stock.scoring.technical_analysis import TechnicalAnalysisEngine
+    from app.domains.stock.scoring.fundamental_analysis import FundamentalAnalysisEngine
+
+    company = SimpleNamespace(id=42, ticker='AMD')
+
+    class TransactionSession(ScriptedSession):
+        failed = False
+        rollbacks = 0
+
+        async def rollback(self):
+            self.failed = False
+            self.rollbacks += 1
+
+        async def execute(self, statement):
+            assert not self.failed, 'cannot query with an aborted transaction'
+            return await super().execute(statement)
+
+    db = TransactionSession([company, company, company])
+
+    async def successful(*args, **kwargs):
+        return None
+
+    async def failed(*args, **kwargs):
+        db.failed = True
+        raise RuntimeError('optional statement error')
+
+    monkeypatch.setattr(MarketDataIngestion, 'ingest_historical_prices', successful)
+    monkeypatch.setattr(FundamentalsIngestion, 'ingest_company_profile', failed)
+    monkeypatch.setattr(NewsIngestion, 'ingest_company_news', successful)
+    monkeypatch.setattr(EventIntelligenceEngine, 'detect_events_from_news', successful)
+    monkeypatch.setattr(TechnicalAnalysisEngine, 'calculate_indicators', successful)
+    monkeypatch.setattr(FundamentalAnalysisEngine, 'calculate_and_store', successful)
+    assert asyncio.run(resolve.ingest_missing_ticker('AMD', db)) is company
+    assert db.rollbacks == 1
