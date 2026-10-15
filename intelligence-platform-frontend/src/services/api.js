@@ -48,7 +48,9 @@ async function request(url, options = {}, retried = false) {
     // Fall back to flat {"detail": "..."} for backward compatibility
     const message = err?.error?.message || err?.detail
       || `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = res.status;
+    throw error;
   }
   // 204 No Content — no body to parse (e.g. DELETE responses)
   if (res.status === 204) {

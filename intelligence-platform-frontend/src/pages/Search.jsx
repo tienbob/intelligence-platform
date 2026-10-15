@@ -10,6 +10,7 @@ export default function Search() {
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const [attempt, setAttempt] = useState(0);
 
@@ -23,10 +24,12 @@ export default function Search() {
 
   useEffect(() => {
     let active = true;
+    let retryTimer;
     const term = initialQuery.trim();
     setQuery(initialQuery);
     setResults(null);
     setError(null);
+    setImporting(false);
     setSearching(Boolean(term));
     if (!term) return;
 
@@ -37,21 +40,39 @@ export default function Search() {
         const companies = await getCompanies({ q: term, limit: 100 });
         if (!active) return;
         if (companies?.companies?.length) {
+          setImporting(false);
           setResults({ type: 'companies', data: companies.companies });
         } else if (/^[A-Za-z0-9.^-]{1,12}$/.test(term)) {
-          const quote = await getStockQuote(term.toUpperCase());
-          if (active) setResults({ type: 'stock', data: quote });
+          try {
+            const quote = await getStockQuote(term.toUpperCase());
+            if (active) {
+              setImporting(false);
+              setResults({ type: 'stock', data: quote });
+            }
+          } catch (err) {
+            if (err.status === 404 && /ingestion has started/i.test(err.message)) {
+              if (active) {
+                setImporting(true);
+                retryTimer = setTimeout(search, 30000);
+              }
+              return;
+            }
+            throw err;
+          }
         } else {
           setError(`No company found for "${term}".`);
         }
       } catch {
-        if (active) setError('Search could not be completed. Try again or check the ticker.');
+        if (active) {
+          setImporting(false);
+          setError('Search could not be completed. Try again or check the ticker.');
+        }
       } finally {
         if (active) setSearching(false);
       }
     }
     search();
-    return () => { active = false; };
+    return () => { active = false; clearTimeout(retryTimer); };
   }, [initialQuery, attempt]);
 
   return (
@@ -90,6 +111,21 @@ export default function Search() {
           </button>
         </div>
       </form>
+
+      {importing && (
+        <div className="card mb-6" role="status" aria-live="polite">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined animate-spin" aria-hidden="true">progress_activity</span>
+            <div>
+              <p className="font-semibold text-on-surface">Importing {initialQuery.toUpperCase()}…</p>
+              <p className="text-sm text-on-surface-variant mt-1">
+                We’re adding this company and its market data. This may take a few minutes.
+                Results will appear automatically; you can also search for another company.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -214,7 +250,7 @@ export default function Search() {
       )}
 
       {/* Empty State */}
-      {!results && !searching && !error && (
+      {!results && !searching && !importing && !error && (
         <div className="card py-16 text-center text-on-surface-variant">
           <span className="material-symbols-outlined text-6xl mb-4 block">search</span>
           <p className="text-lg mb-2">Search for companies and market data</p>
