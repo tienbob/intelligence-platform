@@ -1,4 +1,4 @@
-export default function MetricTile({ label, value, change, changeLabel, icon, color = 'tertiary' }) {
+export default function MetricTile({ label, value, change, changeLabel, icon, description, color = 'tertiary' }) {
   const colorMap = {
     tertiary: { text: 'text-tertiary', bg: 'text-tertiary' },
     secondary: { text: 'text-secondary', bg: 'text-secondary' },
@@ -14,6 +14,7 @@ export default function MetricTile({ label, value, change, changeLabel, icon, co
       </div>
       <span className="text-xs text-on-surface-variant mb-2">{label}</span>
       <div className="text-3xl font-bold text-on-surface mb-1 z-10 data-font">{value}</div>
+      {description && <p className="text-xs text-on-surface-variant z-10 mt-2">{description}</p>}
       {change && (
         <div className={`flex items-center gap-1 text-xs z-10 data-font ${c.text}`}>
           <span className="material-symbols-outlined text-sm">

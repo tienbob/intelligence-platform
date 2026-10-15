@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import select
@@ -171,6 +172,7 @@ class AnalysisPersistence:
             duration_seconds=duration_seconds,
         )
         analysis.status = "completed"
+        analysis.completed_at = datetime.now(timezone.utc)
         await self.persist_evidence(analysis, llm_output)
         await self.session.commit()
         await self.session.refresh(analysis)

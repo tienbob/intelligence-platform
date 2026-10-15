@@ -100,12 +100,14 @@ for coverage limits and migration 0021 requirements on existing databases.
 
 New to stock terminology? Read [Stock and finance terms in plain English](intelligence-platform-stock/docs/STOCK_TERMS_IN_PLAIN_ENGLISH.md) for the app's scores, financial ratios, indicators, AI explanations and backtesting concepts.
 
+Opportunities explains investment score and risk, shows the score date and financial coverage warnings, and links to the matching deep dive. Deep dives start with favorable factors, concerns and missing information. Signed-in users can watch or hide companies and restore them later; preferences are saved per account in the current browser. Opportunities and the watchlist show five companies per page across results matching the active filters. Preferences do not sync across devices.
+
 The framework reads stored company snapshots during a deep dive. Vendor fetching
 is handled separately by ingestion workers. The framework uses deterministic
 Python scoring; the LLM supplies the explanation. API jobs and scheduled analyses always run the framework. No engine selector is required.
 Optional news, fundamentals, technical and macro sections remain supported.
 
-The **Opportunities** page uses each company's latest completed deep dive visible
+The **Opportunities** page uses each company's latest deep dive completed today (UTC) and visible
 to the signed-in user, with screening scores for companies awaiting analysis.
 Its score and deep-dive link refer to the same analysis. Investment score and
 risk score are separate measures.

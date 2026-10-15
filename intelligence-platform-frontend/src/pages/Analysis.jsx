@@ -18,7 +18,7 @@ export default function Analysis() {
   const page = Math.max(1, Number.parseInt(params.get('page'), 10) || 1);
   const [version, setVersion] = useState(0);
   const [state, setState] = useState(null);
-  const [ticker, setTicker] = useState('');
+  const [ticker, setTicker] = useState(() => params.get('ticker')?.trim().toUpperCase() || '');
   const [sources, setSources] = useState(Object.fromEntries(SOURCES.map(key => [key, true])));
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');

@@ -109,6 +109,8 @@ def test_execution_routes_to_pipeline(monkeypatch):
     ))
     assert pipe.requests and pipe.requests[0].entity_ref.entity_id == TICKER
     assert res.analysis.investment_score == 71.5
+    assert res.analysis.completed_at is not None
+    assert res.analysis.completed_at.utcoffset().total_seconds() == 0
     assert res.llm_output["_meta"]["model"] == "fake-model"
     ca.assert_completed_analysis_contract(res.analysis)
 
