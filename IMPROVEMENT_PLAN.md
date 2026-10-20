@@ -209,6 +209,10 @@ Wiring this makes the **server's current `.env` values live** — and they are
 all `1440` (daily). News daily ⇒ events/alerts effectively daily (would have
 masked the 0015 outage even longer). Options:
 
+> ✅ **DECIDED 2026-10-20: Profile A.** Intervals are wired to config; the
+> server's `.env` values (daily) become the effective cadence. Implemented in
+> commit `feat: wire scheduler intervals to StockConfig (Profile A)`.
+
 | Profile | market | news | anomalies | events | fundamentals/macro/scores | Best for |
 |---|---|---|---|---|---|---|
 | **A — as-configured-today** | 1440 | 1440 | 1440 | 24 h | daily | credit-starved environments; slow alerts |
@@ -336,7 +340,7 @@ guards is stable. Phases 1+2 touch overlapping files — land Phase 1 first.
 
 | ID | Decision | Default if unanswered |
 |---|---|---|
-| **D1** | Scheduler cadence profile once intervals are wired: **A** (today's daily values, cheap/stale) or **B** (15-min news/market/anomaly + hourly events, recommended) | Do not wire intervals yet — Phase 2 waits |
+| **D1** | ✅ **Decided 2026-10-20: Profile A** — intervals wired to `StockConfig`; server `.env` values (daily) effective | — |
 | D2 | Off-host backup target (rclone remote, NAS rsync, or local-only for now) | Local-only + weekly manual offload; revisit when a target exists |
 
 ## What I deliberately did NOT plan

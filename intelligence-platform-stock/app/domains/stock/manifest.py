@@ -152,14 +152,25 @@ class StockDomain:
             async def execute(self) -> None:
                 await self._fn()
 
-        return [
-            _Task("Update market data", 5, update_market_data),
-            _Task("Process news", 10, process_news),
-            _Task("Detect anomalies", 15, detect_anomalies),
-            _Task("Analyze events", 60, analyze_events),
+        # Cadences come from StockConfig (root .env) — improvement plan I3,
+        # Phase 2, decision D1 = Profile A. MIN_* fields are minutes,
+        # *_INTERVAL_HR fields are hours. The scheduler reads this list once
+        # at boot: after changing .env, recreate the scheduler container
+        # (docker compose up -d --no-deps --force-recreate scheduler) or it
+        # keeps the old cadence. Tasks without a config key stay fixed and
+        # are documented in MAINTENANCE.md §7.1.
+        from app.domains.stock.config import get_stock_config
+
+        cfg = get_stock_config()
+        tasks = [
+            _Task("Update market data", cfg.MARKET_DATA_UPDATE_INTERVAL_MIN, update_market_data),
+            _Task("Process news", cfg.NEWS_PROCESSING_INTERVAL_MIN, process_news),
+            _Task("Detect anomalies", cfg.ANOMALY_DETECTION_INTERVAL_MIN, detect_anomalies),
+            _Task("Analyze events", cfg.EVENT_ANALYSIS_INTERVAL_HR * 60, analyze_events),
+            # Fixed for now — no .env key yet (MAINTENANCE.md §7.1):
             _Task("Update derived metrics", 60, update_derived_metrics),
-            _Task("Recalculate scores", 1440, recalculate_scores),
-            _Task("Ingest fundamentals", 1440, ingest_fundamentals),
+            _Task("Recalculate scores", cfg.SCORE_RECALCULATION_INTERVAL_HR * 60, recalculate_scores),
+            _Task("Ingest fundamentals", cfg.FUNDAMENTALS_UPDATE_INTERVAL_HR * 60, ingest_fundamentals),
             _Task("Ingest macro indicators", 1440, ingest_macro_indicators),
             _Task("Ingest RAG embeddings", 1440, ingest_rag_embeddings),
             # Point-in-time snapshot for look-ahead-free backtesting.
@@ -168,8 +179,17 @@ class StockDomain:
             # previously this job only lived in a hardcoded scheduler that
             # was never started, so the snapshots table stayed empty.
             _Task("Create daily backtest snapshot", 1440, create_daily_snapshot),
-
         ]
+
+        # Fail loudly on misconfiguration: the scheduler's per-domain error
+        # handling would otherwise silently register zero jobs.
+        invalid = [t.name for t in tasks if t.interval_minutes <= 0]
+        if invalid:
+            raise ValueError(
+                "Non-positive scheduler interval(s) configured for: "
+                + ", ".join(invalid)
+            )
+        return tasks
 
     # ── API Router ──────────────────────────────────────────────
 

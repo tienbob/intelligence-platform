@@ -64,6 +64,9 @@ dependent services start.
 Configure `LLM_PROVIDER`, `LLM_API_KEY` and `LLM_MODEL` for analysis, plus
 `EMBEDDING_PROVIDER`, `EMBEDDING_API_KEY` and the embedding model settings for RAG.
 The root `.env.example` lists the supported configuration fields.
+Scheduler cadences (`*_INTERVAL_MIN` / `*_INTERVAL_HR`) are **effective**: the
+scheduler reads them once at boot, so recreate the scheduler container after
+changing them (`docker compose up -d --no-deps --force-recreate scheduler`).
 
 Compose defaults to `ENVIRONMENT=development` for Python and Rails, including
 Rails migrations. For production, set `ENVIRONMENT=production`, real

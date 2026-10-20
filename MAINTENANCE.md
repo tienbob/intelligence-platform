@@ -400,21 +400,24 @@ scheduler startup, so a fresh environment populates on day one.
 
 | # | Task | Every | Implementation | Reads → Writes |
 |---|---|---|---|---|
-| 1 | Update market data | 5 min | `workers/market_worker.py#update_market_data` | stale-first tickers → `stock_prices` (ON CONFLICT `(company_id,interval,timestamp)`); stops on `RateLimitError` until next run |
-| 2 | Process news | 10 min | `workers/news_worker.py#process_news` | Finnhub → `news`,`company_news` → sentiment/materiality enrichment → event detection (**max 50 companies/run**) |
-| 3 | Detect anomalies | 15 min | `workers/event_worker.py#detect_anomalies` | `stock_prices` (30d) → `anomaly_scores` → `PRICE_ANOMALY` alerts |
-| 4 | Analyze events | 60 min | `workers/event_worker.py#analyze_events` | `company_news` (7d) → `market_events` → `MARKET_EVENT` alerts |
-| 5 | Update derived metrics | 60 min | `workers/analysis_worker.py#update_derived_metrics` | → `technical_indicators`, `risk_metrics` |
-| 6 | Recalculate scores | 24 h | `analysis_worker.py#recalculate_scores` | → `investment_scores` (weights §9) |
-| 7 | Ingest fundamentals | 24 h | `workers/ingestion_worker.py#ingest_fundamentals` | FMP → `financial_statements`, profile |
-| 8 | Ingest macro indicators | 24 h | `ingestion_worker.py#ingest_macro_indicators` | FRED → `economic_indicators` |
-| 9 | Ingest RAG embeddings | 24 h | `workers/embedding_worker.py#ingest_rag_embeddings` | unindexed news/events/analyses → embedding vectors (limit 50/run) |
-| 10 | Create daily backtest snapshot | 24 h | `workers/backtest_worker.py#create_daily_snapshot` | per-day `pg_advisory_xact_lock` → `backtest_snapshots` (point-in-time) |
+| 1 | Update market data | `MARKET_DATA_UPDATE_INTERVAL_MIN` (default 5 min) | `workers/market_worker.py#update_market_data` | stale-first tickers → `stock_prices` (ON CONFLICT `(company_id,interval,timestamp)`); stops on `RateLimitError` until next run |
+| 2 | Process news | `NEWS_PROCESSING_INTERVAL_MIN` (default 10 min) | `workers/news_worker.py#process_news` | Finnhub → `news`,`company_news` → sentiment/materiality enrichment → event detection (**max 50 companies/run**) |
+| 3 | Detect anomalies | `ANOMALY_DETECTION_INTERVAL_MIN` (default 15 min) | `workers/event_worker.py#detect_anomalies` | `stock_prices` (30d) → `anomaly_scores` → `PRICE_ANOMALY` alerts |
+| 4 | Analyze events | `EVENT_ANALYSIS_INTERVAL_HR` (default 1 h) | `workers/event_worker.py#analyze_events` | `company_news` (7d) → `market_events` → `MARKET_EVENT` alerts |
+| 5 | Update derived metrics | 60 min (fixed — no key yet) | `workers/analysis_worker.py#update_derived_metrics` | → `technical_indicators`, `risk_metrics` |
+| 6 | Recalculate scores | `SCORE_RECALCULATION_INTERVAL_HR` (default 24 h) | `analysis_worker.py#recalculate_scores` | → `investment_scores` (weights §9) |
+| 7 | Ingest fundamentals | `FUNDAMENTALS_UPDATE_INTERVAL_HR` (default 24 h) | `workers/ingestion_worker.py#ingest_fundamentals` | FMP → `financial_statements`, profile |
+| 8 | Ingest macro indicators | 24 h (fixed — no key yet) | `ingestion_worker.py#ingest_macro_indicators` | FRED → `economic_indicators` |
+| 9 | Ingest RAG embeddings | 24 h (fixed — no key yet) | `workers/embedding_worker.py#ingest_rag_embeddings` | unindexed news/events/analyses → embedding vectors (limit 50/run) |
+| 10 | Create daily backtest snapshot | 24 h (fixed — no key yet) | `workers/backtest_worker.py#create_daily_snapshot` | per-day `pg_advisory_xact_lock` → `backtest_snapshots` (point-in-time) |
 
-> ⚠️ **Interval overrides in `.env` (`NEWS_PROCESSING_INTERVAL_MIN=1440`, etc.)
-> are currently NOT read by the manifest — the table above is authoritative.**
-> If you change a cadence, edit `manifest.py#get_intelligence_tasks`, or wire
-> the config values in, and rebuild the `scheduler` image.
+> ✅ **Config-driven cadence (improvement plan Phase 2, decision D1 = Profile A):**
+> the six keys above are **effective** — read from `StockConfig` once at
+> scheduler boot. After changing `.env`:
+> `docker compose up -d --no-deps --force-recreate scheduler`. Tasks marked
+> *fixed* have no config key yet. The production server currently runs
+> Profile A: all six keys = 1440 (daily) in its `.env`, so the four frequent
+> tasks run once a day there.
 
 Registration/execution is observable: startup logs print
 `Scheduled job: <id> | next_run=…`; tasks log their own summaries
@@ -480,6 +483,7 @@ surfacing: dashboard · opportunities · events · alerts · backtests
 | Embeddings | `EMBEDDING_PROVIDER/MODEL/DIMENSIONS/API_KEY` | RAG vectors (must match pgvector column dims) |
 | Scoring | `SCORE_WEIGHT_FUNDAMENTAL=0.30`, `VALUATION=0.20`, `GROWTH=0.15`, `TECHNICAL=0.10`, `SENTIMENT=0.10`, `CATALYST=0.10`, `RISK=0.15` (subtractive) | must sum per `investment_scoring.py` contract |
 | Events/anomalies | `MIN_EVENT_RELEVANCE=0.8`, `ANOMALY_MOVEMENT_THRESHOLD=80.0` + component weights | gates phantom events / anomaly noise |
+| Scheduler cadence | `MARKET_DATA_UPDATE_INTERVAL_MIN`, `NEWS_PROCESSING_INTERVAL_MIN`, `ANOMALY_DETECTION_INTERVAL_MIN`, `EVENT_ANALYSIS_INTERVAL_HR`, `FUNDAMENTALS_UPDATE_INTERVAL_HR`, `SCORE_RECALCULATION_INTERVAL_HR` | **Effective** (Phase 2, Profile A) — read at scheduler boot; recreate scheduler to apply |
 | Auth | `JWT_SECRET_KEY`, `AUTH_ENABLED`, `PYTHON_SERVICE_KEY` | shared by Rails + Python |
 | Gateway | `CORS_ALLOWED_ORIGINS`, `SECRET_KEY_BASE`, `RAILS_MASTER_KEY`, `RAILS_BUNDLE_WITHOUT` | Rails boot + build hygiene |
 | Frontend | `VITE_REFRESH_DASHBOARD_MS`, `VITE_REFRESH_ANALYSIS_JOBS_MS`, `VITE_REFRESH_ANALYSIS_DETAIL_MS` | **build args** → changing requires frontend rebuild |
@@ -597,8 +601,10 @@ SELECT provider, retrieved_at, payload::text FROM raw_news ORDER BY retrieved_at
 1. **Baked vs bind-mounted images** — the #1 "my fix isn't live" cause.
    `python` = bind mount (restart). `worker`/`scheduler`/`frontend`/`rails` =
    baked (`--build`). See §10.1.
-2. **`.env` interval overrides are ignored** by the scheduler — cadences live in
-   `manifest.py#get_intelligence_tasks` (§7.1).
+2. **Scheduler cadences are config-driven** (Phase 2, D1 Profile A) — read once
+   at boot from `StockConfig`; **recreate the scheduler container** after
+   editing `.env` or it keeps the old cadence (§7.1). Four tasks are fixed
+   (no key yet): derived metrics, macro, embeddings, backtest snapshot.
 3. **News worker caps at 50 companies per run** (`process_news` `.limit(50)`).
    Growth beyond that needs batching or it will silently lag.
 4. **Upserts must match real unique constraints.** See the case study below.
