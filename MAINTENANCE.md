@@ -705,6 +705,63 @@ unique constraint **first** and make the `ON CONFLICT` target match exactly.
 | Analysis pipeline | `app/intelligence/pipeline.py`, `app/domains/stock/services/company_analysis.py` |
 | FE API client + envelope handling | `intelligence-platform-frontend/src/services/api.js` |
 | FE polling | `src/services/polling.js`, `src/config.js` |
+| Backup / restore drill scripts | `scripts/backup_db.sh`, `scripts/restore_drill.sh` |
+| CI (unit + migration/upsert integration) | `.github/workflows/ci.yml`, `scripts/integration_test.sh` |
+
+---
+
+## 15. Backup & Restore Runbook (improvement plan Phase 0)
+
+The single `postgres_data` volume holds every company, user, analysis, and
+alert — losing it is unrecoverable without backups. Two scripts cover the
+daily duty and the (mandatory) proof that restores actually work.
+
+### 15.1 Nightly backup (`scripts/backup_db.sh`)
+
+```bash
+./scripts/backup_db.sh                      # local dir; defaults shown below
+BACKUP_DIR=/backups/docker-ip BACKUP_REMOTE='rclone copy ...' ./scripts/backup_db.sh
+```
+
+- `pg_dump -Fc` (custom compressed format) against the running `db` container
+  via `docker compose exec -T db pg_dump -U postgres -d intelligence_stock`.
+- Output: `$BACKUP_DIR/daily/intelligence_stock_YYYY-MM-DD_HHMMSS.dump`
+  (`pg_dump -Fc` compresses internally; defaults to `~/db-backups/daily`).
+- Retention: keeps the **14 newest daily** dumps; older ones are deleted.
+- Integrity check: the newest dump is verified with `pg_restore --list`.
+- `set -euo pipefail`; non-zero exit on any failure so cron surfaces it.
+
+**Cron example (server, as the compose user):**
+
+```cron
+15 2 * * * cd ~/intelligence-platform && ./scripts/backup_db.sh >> ~/backup.log 2>&1
+```
+
+Also copy dumps **off-host** (rclone/rsync/S3) — a backup on the same disk as
+the database does not survive that disk.
+
+### 15.2 Restore drill (`scripts/restore_drill.sh`)
+
+Proves the latest dump is restorable — a backup that has never been restored
+is a hope, not a backup. Run at least monthly and after any major migration:
+
+```bash
+./scripts/restore_drill.sh                    # restores the newest dump
+./scripts/restore_drill.sh /path/to/xyz.dump  # restores a specific dump
+```
+
+- Restores into a **throwaway** pgvector container (`ip_restore_drill`,
+  auto-removed) — never the primary database.
+- Applies `pg_restore --no-owner --no-privileges`, then asserts real data is
+  present (`SELECT COUNT(*) FROM companies` > 0) and prints PASS/FAIL.
+
+### 15.3 Real disaster recovery (order of operations)
+
+1. `docker compose down` (keep volumes) on the dead/replacement host.
+2. Start only the db service; restore the dump **into the existing volume** (the
+   file is piped into the container — no host postgres client needed):
+   `docker compose exec -T db pg_restore -U postgres -d intelligence_stock --no-owner --no-privileges --clean < <dump>`
+3. `docker compose up -d` and verify §10.3 counts + §10.4 freshness.
 
 *Generated 2026-10-20 against commit `067296f` (hotfix: market_events ON CONFLICT).*
 

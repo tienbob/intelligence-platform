@@ -24,6 +24,27 @@ no genericization of the Rails proxy — current choices are correct at this sca
 
 ---
 
+## Implementation Status (2026-10-20)
+
+All phases implemented in the working tree. **Not yet committed** — review
+and commit when ready.
+
+| Phase | Status | Deliverables |
+|---|---|---|
+| 0 — Backups | ✅ Done | `scripts/backup_db.sh` (nightly `pg_dump -Fc`, 14-dump retention, integrity check), `scripts/restore_drill.sh` (throwaway-container restore + data assertion), `MAINTENANCE.md` §15 runbook |
+| 1 — Observability | ✅ Done | Migration `0024_add_task_heartbeats`, `app/core/heartbeat.py` `tracked()` wrapper wired into `manifest.py` `_Task.execute`, `ProgrammingError` re-raise + `record_task_failure` metric in `news_worker`/`event_worker`/`company_resolution`, cap-truncation warnings in news + embedding workers |
+| 2 — Config wiring | ✅ Done (D1 = Profile A) | `manifest.py#get_intelligence_tasks` reads `StockConfig` cadences; fail-loud guard on non-positive intervals; `tests/test_scheduler_intervals.py` (5 tests); `.env.example` + `README.md` + `MAINTENANCE.md` §7.1/§9/§11 updated |
+| 3 — CI + integration tests | ✅ Done | `.github/workflows/ci.yml` (unit + integration + FE build), `scripts/integration_test.sh` harness, `tests/integration/` suite covering prices/news+links/events (0015 regression)/work_jobs/task_heartbeats upsert paths against a migrated throwaway Postgres |
+| 4 — Freshness badge | ✅ Done | `GET /internal/status` (Python), Rails `proxy#status` + route, FE `getPipelineStatus` + dashboard freshness chip (green/amber/red with per-task tooltip). I7 batching intentionally deferred until cap warnings fire in production (see Phase 4.2 non-goal note) |
+
+Validation: Python unit suite **339 passed, 1 skipped** (the skip is the
+integration module without `DATABASE_URL` — by design); FE `npm run build`
+green; all shell scripts pass `bash -n`. The integration harness could not be
+exercised locally (Docker daemon unavailable in this workspace) — it runs
+automatically in CI and via `scripts/integration_test.sh` on any Docker host.
+
+---
+
 ## Phase 0 — Backups & Restore Drill (I1, P0)
 
 **Problem.** All state lives in one docker volume (`postgres_data`) on one

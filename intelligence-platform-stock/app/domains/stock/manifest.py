@@ -150,7 +150,9 @@ class StockDomain:
                 self.run_immediately = run_immediately
 
             async def execute(self) -> None:
-                await self._fn()
+                from app.core.heartbeat import tracked
+
+                await tracked(self.name, self._fn)
 
         # Cadences come from StockConfig (root .env) — improvement plan I3,
         # Phase 2, decision D1 = Profile A. MIN_* fields are minutes,

@@ -1,7 +1,7 @@
 import { startPolling } from '../services/polling';
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getMarketOverview, getAlerts, getMarketIndices, getTopMovers } from '../services/api';
+import { getMarketOverview, getAlerts, getMarketIndices, getTopMovers, getPipelineStatus } from '../services/api';
 import { useToast } from '../components/Toast';
 import { REFRESH_DASHBOARD_MS } from '../config';
 
@@ -14,6 +14,7 @@ export default function Dashboard() {
   const indices = indexData?.indices || [];
   const [settledSections, setSettledSections] = useState({});
   const [topMovers, setTopMovers] = useState([]);
+  const [pipeline, setPipeline] = useState(null);
 
   const [failedSections, setFailedSections] = useState([]);
 
@@ -37,6 +38,10 @@ export default function Dashboard() {
           if (active()) setSettledSections(previous => ({ ...previous, [name]: true }));
         });
 
+    // Pipeline freshness is auxiliary: a failed fetch hides the badge
+    // instead of adding noise to the failures banner (audit U1 contract).
+    getPipelineStatus().then((d) => { if (active()) setPipeline(d); }).catch(() => {});
+
     await Promise.allSettled([
       section('market overview', getMarketOverview, setMarket, null),
       section('alerts', () => getAlerts({ limit: 5 }), (d) => setAlerts(d?.alerts || []), []),
@@ -54,12 +59,48 @@ export default function Dashboard() {
   const vix = market?.macro_environment?.vix ?? '—';
   const vixPct = market?.macro_environment?.vix != null ? Math.min(100, (market.macro_environment.vix / 40) * 100) : 0;
 
+  // Pipeline freshness chip (improvement plan Phase 4): age of the most
+  // recent successful background task, colored by overall pipeline level.
+  const pipelineLevel = pipeline?.overall;
+  const freshestTask = (pipeline?.tasks || [])
+    .filter((t) => t.age_minutes != null)
+    .sort((a, b) => a.age_minutes - b.age_minutes)[0];
+  const freshAgeLabel = freshestTask
+    ? freshestTask.age_minutes < 60
+      ? `${Math.round(freshestTask.age_minutes)}m ago`
+      : `${Math.floor(freshestTask.age_minutes / 60)}h ${Math.round(freshestTask.age_minutes % 60)}m ago`
+    : null;
+  const pipelineTooltip = (pipeline?.tasks || []).length
+    ? (pipeline.tasks)
+        .map((t) => `${t.task}: ${t.level} (last success ${t.age_minutes != null ? `${Math.round(t.age_minutes)}m ago` : 'never'})`)
+        .join('\n')
+    : 'No pipeline runs recorded yet';
+
   return (
     <div>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div>
           <h1 className="text-4xl font-bold text-on-surface">Market Dashboard</h1>
           <p className="text-sm text-on-surface-variant mt-1">Market overview & macro intelligence.{REFRESH_DASHBOARD_MS > 0 ? ` Auto-refreshes every ${REFRESH_DASHBOARD_MS / 1000}s.` : ''}</p>
+          {pipeline && (
+            <span
+              title={pipelineTooltip}
+              className={`inline-flex items-center gap-1.5 mt-2 text-xs font-medium rounded-full border px-2.5 py-1 ${
+                pipelineLevel === 'ok'
+                  ? 'border-tertiary/30 text-tertiary'
+                  : pipelineLevel === 'delayed'
+                    ? 'border-secondary/30 text-secondary'
+                    : 'border-error/30 text-error'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {pipelineLevel === 'ok' ? 'check_circle' : pipelineLevel === 'delayed' ? 'schedule' : 'error'}
+              </span>
+              {pipelineLevel === 'ok' && `Data pipelines fresh${freshAgeLabel ? ` — updated ${freshAgeLabel}` : ''}`}
+              {pipelineLevel === 'delayed' && 'Data pipelines delayed'}
+              {pipelineLevel === 'down' && 'Data pipelines down'}
+            </span>
+          )}
         </div>
         <div className="flex gap-2">
           <button className="btn-secondary flex items-center gap-2" onClick={() => toast('Export feature coming soon', 'info')}>

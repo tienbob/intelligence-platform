@@ -77,6 +77,11 @@ class MetricsRegistry:
         self._provider_errors: dict[str, int] = defaultdict(int)
         self._llm_calls: int = 0
         self._llm_tokens: int = 0
+        self._task_failures: dict[str, int] = defaultdict(int)
+
+    def record_task_failure(self, task: str) -> None:
+        """Count a failed periodic pipeline task (improvement plan I2/1.3)."""
+        self._task_failures[task] += 1
 
     def record_request(self, endpoint: str, status_code: int, latency_ms: float) -> None:
         """Record a request with its status and latency.
@@ -112,6 +117,7 @@ class MetricsRegistry:
             "provider_errors": dict(self._provider_errors),
             "llm_calls": self._llm_calls,
             "llm_tokens": self._llm_tokens,
+            "pipeline_task_failures_total": dict(self._task_failures),
             "avg_latency_ms": {
                 endpoint: lats[0] / lats[1] if lats[1] else 0
                 for endpoint, lats in self._request_latencies.items()

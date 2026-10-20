@@ -116,6 +116,7 @@ export const getEvent = (id) => request(`/events/${id}`);
 
 // Market
 export const getMarketOverview = () => request('/market/overview');
+export const getPipelineStatus = () => request('/status');
 export const getMarketIndices = () => request('/market/indices');
 export const getTopMovers = () => request('/market/top-movers');
 

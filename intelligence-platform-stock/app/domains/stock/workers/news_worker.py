@@ -6,6 +6,7 @@ Every 5–15 minutes: Process important news.
 
 from __future__ import annotations
 
+import sqlalchemy
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -88,17 +89,27 @@ async def process_news() -> None:
 
     async with async_session_factory() as session:
         # Only load scalar values that are needed by the worker.
-        #
         # Avoid keeping Company ORM objects alive while NewsIngestion
         # commits/rolls back against the same AsyncSession.
         result = await session.execute(
             select(
                 Company.id,
                 Company.ticker,
-            ).limit(50)
+            )
         )
 
         companies = result.all()
+        cap = 50
+        deferred = max(0, len(companies) - cap)
+        if deferred:
+            logger.warning(
+                "process_news: %d of %d companies deferred this run (cap=%d) "
+                "— backlog grows if this recurs",
+                deferred,
+                len(companies),
+                cap,
+            )
+        companies = companies[:cap]
 
         ingestion = NewsIngestion(session)
 
@@ -113,6 +124,16 @@ async def process_news() -> None:
                     limit=20,
                 )
 
+            except sqlalchemy.exc.ProgrammingError:
+                # Schema/code mismatch (e.g. ON CONFLICT target) — never a
+                # per-ticker data problem. Swallowing it silently kills the
+                # whole feature (the 0015 outage hid for weeks this way).
+                logger.critical(
+                    "Programming error in news ingestion for %s — "
+                    "schema mismatch?",
+                    ticker,
+                )
+                raise
             except Exception as exc:
                 logger.error(
                     "Failed to process news for %s: %s",
@@ -151,6 +172,16 @@ async def process_news() -> None:
                     hours=168,
                 )
 
+            except sqlalchemy.exc.ProgrammingError:
+                # Schema/code mismatch (e.g. ON CONFLICT target) — never a
+                # per-ticker data problem. Swallowing it silently kills the
+                # whole feature (the 0015 outage hid for weeks this way).
+                logger.critical(
+                    "Programming error in event detection for %s — "
+                    "schema mismatch?",
+                    ticker,
+                )
+                raise
             except Exception as exc:
                 logger.error(
                     "Failed to detect events for %s: %s",

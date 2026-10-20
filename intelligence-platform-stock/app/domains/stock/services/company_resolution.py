@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+import sqlalchemy
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -167,6 +168,12 @@ async def ingest_missing_ticker(
             fundamentals = FundamentalsIngestion(db)
             await fundamentals.ingest_company_profile(ticker)
             await fundamentals.ingest_fmp_statements(ticker)
+        except sqlalchemy.exc.ProgrammingError:
+            logger.critical(
+                "Programming error in optional fundamentals ingestion for %s — schema mismatch?",
+                ticker,
+            )
+            raise
         except Exception:
             logger.exception("Optional fundamentals ingestion failed for %s", ticker)
             await db.rollback()
@@ -175,6 +182,12 @@ async def ingest_missing_ticker(
         try:
             news = NewsIngestion(db)
             await news.ingest_company_news(ticker, limit=50)
+        except sqlalchemy.exc.ProgrammingError:
+            logger.critical(
+                "Programming error in optional news ingestion for %s — schema mismatch?",
+                ticker,
+            )
+            raise
         except Exception:
             logger.exception("Optional news ingestion failed for %s", ticker)
             await db.rollback()
@@ -191,6 +204,12 @@ async def ingest_missing_ticker(
             if company:
                 event_engine = EventIntelligenceEngine(db)
                 await event_engine.detect_events_from_news(company.id, hours=168)
+        except sqlalchemy.exc.ProgrammingError:
+            logger.critical(
+                "Programming error in optional event detection for %s — schema mismatch?",
+                ticker,
+            )
+            raise
         except Exception:
             logger.exception("Optional event detection ingestion failed for %s", ticker)
             await db.rollback()
@@ -206,6 +225,12 @@ async def ingest_missing_ticker(
             if company:
                 await TechnicalAnalysisEngine(db).calculate_indicators(company.id)
                 await FundamentalAnalysisEngine(db).calculate_and_store(company.id)
+        except sqlalchemy.exc.ProgrammingError:
+            logger.critical(
+                "Programming error in optional derived data ingestion for %s — schema mismatch?",
+                ticker,
+            )
+            raise
         except Exception:
             logger.exception("Optional derived data ingestion failed for %s", ticker)
             await db.rollback()
