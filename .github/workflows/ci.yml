@@ -52,4 +52,4 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run migration/upsert integration tests
-        run: ../scripts/integration_test.sh
+        run: bash ../scripts/integration_test.sh
