@@ -307,7 +307,11 @@ class EventIntelligenceEngine:
 
             # Phase 4: Dedup via INSERT ... ON CONFLICT DO NOTHING.
             # One news article produces one canonical event per company.
-            # (unique constraint on company_id, source_news_id)
+            # (unique constraint on company_id, source_news_id — migration
+            # 0015 dropped the older 3-column constraint, so the conflict
+            # target must stay 2-column or PostgreSQL rejects the insert
+            # with "no unique or exclusion constraint matching the ON
+            # CONFLICT specification".)
             from sqlalchemy.dialects.postgresql import insert as pg_insert
 
             insert_stmt = pg_insert(MarketEvent).values(
@@ -322,7 +326,7 @@ class EventIntelligenceEngine:
                 description=news.title,
                 source_news_id=news.id,
             ).on_conflict_do_nothing(
-                index_elements=["company_id", "source_news_id","event_type"]
+                index_elements=["company_id", "source_news_id"]
             ).returning(MarketEvent.id)
 
             result = await self.session.execute(insert_stmt)
