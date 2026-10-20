@@ -8,6 +8,7 @@ Every hour: Analyze important events.
 
 from __future__ import annotations
 
+import sqlalchemy
 from sqlalchemy import select
 
 from app.core.database import async_session_factory
@@ -157,6 +158,15 @@ async def detect_anomalies() -> None:
             try:
                 await engine.detect_anomalies(company.id)
 
+            except sqlalchemy.exc.ProgrammingError:
+                # Schema/code mismatch (e.g. ON CONFLICT target) — never a
+                # per-ticker data problem. Swallowing it silently kills the
+                # whole feature (the 0015 outage hid for weeks this way).
+                logger.critical(
+                    "Programming error in anomaly detection for %s — schema mismatch?",
+                    ticker,
+                )
+                raise
             except Exception as exc:
                 # The engine may have failed after issuing a DB statement.
                 # Reset the transaction before processing the next company.
@@ -208,6 +218,15 @@ async def analyze_events() -> None:
                     hours=168,
                 )
 
+            except sqlalchemy.exc.ProgrammingError:
+                # Schema/code mismatch (e.g. ON CONFLICT target) — never a
+                # per-ticker data problem. Swallowing it silently kills the
+                # whole feature (the 0015 outage hid for weeks this way).
+                logger.critical(
+                    "Programming error in event detection for %s — schema mismatch?",
+                    ticker,
+                )
+                raise
             except Exception as exc:
                 await session.rollback()
 

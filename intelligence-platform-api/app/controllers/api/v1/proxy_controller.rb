@@ -76,6 +76,13 @@ module Api
         render_python(:get, "/market/top-movers")
       end
 
+      # ── Pipeline status ─────────────────────────────────────
+      # Freshness of background pipelines (task heartbeats) — powers the
+      # dashboard badge. Read-only; cadence levels computed upstream.
+      def status
+        render_python(:get, "/status")
+      end
+
       # ── Portfolio optimizer (stateless — proxied to Python) ─
       def optimize
         render_python(:post, "/portfolio/optimize", body: parsed_body, query: {})

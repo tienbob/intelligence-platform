@@ -42,6 +42,7 @@ Rails.application.routes.draw do
       get "market/overview",                to: "proxy#market_overview"
       get "market/indices",                 to: "proxy#market_indices"
       get "market/top-movers",              to: "proxy#market_top_movers"
+      get "status",                         to: "proxy#status"
       post "analysis/company",              to: "proxy#analysis_company"
       post "analysis/:id/cancel",            to: "proxy#analysis_cancel"
       get "analysis/jobs",                  to: "proxy#analysis_jobs"

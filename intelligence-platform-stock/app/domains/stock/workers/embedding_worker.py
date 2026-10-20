@@ -7,6 +7,8 @@ and AI analyses to support retrieval.
 
 from __future__ import annotations
 
+import sqlalchemy
+
 from app.core.database import async_session_factory
 from app.core.logging import get_logger
 from app.domains.stock.scoring.embeddings import EmbeddingIngestionService
@@ -30,6 +32,24 @@ async def ingest_rag_embeddings() -> None:
                 counts.get("analyses", 0),
             )
 
+            # Cap-truncation warning: if any category exhausted the per-run
+            # limit, the backlog is still growing and will silently lag
+            # (improvement plan I5). One line here beats invisible staleness.
+            capped = [kind for kind, n in counts.items() if n >= 50]
+            if capped:
+                logger.warning(
+                    "Embedding backlog still truncated for: %s — consider "
+                    "batching or raising the per-run limit",
+                    ", ".join(sorted(capped)),
+                )
+
+        except sqlalchemy.exc.ProgrammingError:
+            # Schema/code mismatch — never a data problem. Swallowing it
+            # silently kills RAG embedding for every future run.
+            logger.critical(
+                "Programming error in RAG embedding ingestion — schema mismatch?",
+            )
+            raise
         except Exception as exc:
             # Reset the PostgreSQL transaction so the session is left clean.
             await session.rollback()
