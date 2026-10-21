@@ -27,8 +27,8 @@ export default function PageTitle() {
     const segment = pathname.split('/').filter(Boolean)[0] || '';
     const page = TITLES[segment];
     document.title = page
-      ? `${page} — Market Intelligence`
-      : 'Market Intelligence — AI-Powered Research';
+      ? `${page} — TickerRadar`
+      : 'TickerRadar — AI-Powered Research';
   }, [pathname]);
 
   return null;

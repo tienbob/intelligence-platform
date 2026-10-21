@@ -64,14 +64,17 @@ export default function TopNav() {
 
   return (
     <header className="hidden md:flex justify-between items-center w-full px-container-margin h-16 z-50 bg-surface-container-low border-b border-outline-variant fixed top-0">
-      {/* Brand + Search */}
+      {/* Brand + Search — the logo always returns to the landing page
+          (standard UX), while a separate Dashboard button keeps the
+          authenticated entry point one click away. */}
       <div className="flex items-center gap-6">
         <Link
           className="flex items-center gap-2 cursor-pointer"
-          to={isAuthenticated ? '/dashboard' : '/'}
+          to="/"
+          aria-label="Back to landing page"
         >
           <span className="text-2xl font-bold text-primary tracking-tight">
-            Market Intelligence
+            TickerRadar
           </span>
         </Link>
         <div className="relative hidden sm:block w-64 md:w-96">

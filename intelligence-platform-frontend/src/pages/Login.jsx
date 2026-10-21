@@ -41,13 +41,22 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-[80vh] flex items-center justify-center">
+    <div className="relative min-h-[80vh] flex items-center justify-center">
+      {/* Standalone page (no TopNav/Sidebar): always give the user a way home. */}
+      <Link
+        to="/"
+        className="absolute top-4 left-4 flex items-center gap-1 text-sm text-on-surface-variant hover:text-on-surface transition-colors"
+        aria-label="Back to home"
+      >
+        <span className="material-symbols-outlined text-lg">arrow_back</span>
+        Back to Home
+      </Link>
       <div className="card w-full max-w-md">
         <div className="text-center mb-6">
           <span className="material-symbols-outlined text-5xl text-primary mb-2">account_balance</span>
           <h1 className="text-2xl font-bold text-on-surface">Sign In</h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Access your Market Intelligence dashboard
+            Access your TickerRadar dashboard
           </p>
         </div>
 

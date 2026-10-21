@@ -26,7 +26,7 @@ export default function Sidebar() {
           <span className="material-symbols-outlined text-on-surface-variant">account_balance</span>
         </div>
         <div>
-          <h2 className="text-sm font-semibold text-on-surface leading-tight">Market Intelligence</h2>
+          <h2 className="text-sm font-semibold text-on-surface leading-tight">TickerRadar</h2>
           <p className="text-xs text-on-surface-variant">AI-Powered Research</p>
         </div>
       </div>
@@ -58,8 +58,9 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Sidebar Footer */}
-      <div className="px-4 mt-auto">
+      {/* Sidebar Footer — extra bottom padding keeps Support/Documentation
+          from sitting flush against the bottom edge of the screen. */}
+      <div className="px-4 pb-5 mt-auto">
         <button
           className="w-full py-2 bg-secondary-container text-on-secondary-container text-sm font-semibold rounded hover:opacity-90 transition-opacity mb-4 flex items-center justify-center gap-2"
           onClick={() => toast('Upgrade feature coming soon', 'info')}
@@ -74,12 +75,16 @@ export default function Sidebar() {
           >
             <span className="material-symbols-outlined text-base">help</span> Support
           </button>
-          <button
-            className="flex items-center gap-3 text-on-surface-variant text-xs hover:text-on-surface transition-colors px-2 cursor-pointer bg-transparent border-none"
-            onClick={() => toast('Documentation feature coming soon', 'info')}
+          <NavLink
+            to="/documentation"
+            className={({ isActive }) =>
+              `flex items-center gap-3 text-xs transition-colors px-2 ${
+                isActive ? 'text-primary font-semibold' : 'text-on-surface-variant hover:text-on-surface'
+              }`
+            }
           >
             <span className="material-symbols-outlined text-base">description</span> Documentation
-          </button>
+          </NavLink>
         </div>
       </div>
     </aside>

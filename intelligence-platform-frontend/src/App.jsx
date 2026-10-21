@@ -23,6 +23,7 @@ const Alerts = lazy(() => import('./pages/Alerts'));
 const Search = lazy(() => import('./pages/Search'));
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const Documentation = lazy(() => import('./pages/Documentation'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 function PageFallback() {
@@ -53,6 +54,10 @@ export default function App() {
         {/* Public auth pages */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+
+        {/* Public documentation (app chrome, no auth guard) — linked from
+            Landing, Sidebar, Footer and MobileNav. */}
+        <Route path="/documentation" element={<Layout><Documentation /></Layout>} />
 
         {/* Protected app pages (require login) */}
         <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />

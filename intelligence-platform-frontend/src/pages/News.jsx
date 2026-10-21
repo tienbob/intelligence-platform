@@ -66,7 +66,7 @@ export default function News() {
       setVixChange(v == null ? 'unknown' : v < 20 ? 'low' : v < 30 ? 'moderate' : 'high');
       setError(null);
     } catch (e) {
-      setError(e.message || 'Failed to load market intelligence');
+      setError(e.message || 'Failed to load market news');
     }
   }, [tickerFilter, eventTypes, minImpact]);
 
@@ -81,7 +81,7 @@ export default function News() {
     <div>
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div>
-          <h1 className="text-4xl font-bold text-on-surface">Market Intelligence</h1>
+          <h1 className="text-4xl font-bold text-on-surface">News</h1>
           <p className="text-sm text-on-surface-variant mt-1">
             Correlated news and event timelines for high-signal analysis.
           </p>
@@ -95,7 +95,7 @@ export default function News() {
 
       {error && (
         <div role="alert" className="mb-6 p-4 rounded-lg border border-error/30 bg-error/5 text-sm text-error flex flex-wrap items-center justify-between gap-2">
-          <p>Could not load market intelligence: {error}</p>
+          <p>Could not load market news: {error}</p>
           <button className="btn-secondary btn-sm" onClick={() => loadData()}>Retry</button>
         </div>
       )}

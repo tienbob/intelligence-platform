@@ -21,6 +21,7 @@ const moreItems = [
   { to: '/news', label: 'News', icon: 'newspaper' },
   { to: '/events', label: 'Events', icon: 'event' },
   { to: '/backtest', label: 'Backtest', icon: 'history' },
+  { to: '/documentation', label: 'Docs', icon: 'description' },
 ];
 
 export default function MobileNav() {
