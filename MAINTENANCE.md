@@ -486,7 +486,8 @@ surfacing: dashboard · opportunities · events · alerts · backtests
 | Scheduler cadence | `MARKET_DATA_UPDATE_INTERVAL_MIN`, `NEWS_PROCESSING_INTERVAL_MIN`, `ANOMALY_DETECTION_INTERVAL_MIN`, `EVENT_ANALYSIS_INTERVAL_HR`, `FUNDAMENTALS_UPDATE_INTERVAL_HR`, `SCORE_RECALCULATION_INTERVAL_HR` | **Effective** (Phase 2, Profile A) — read at scheduler boot; recreate scheduler to apply |
 | Auth | `JWT_SECRET_KEY`, `AUTH_ENABLED`, `PYTHON_SERVICE_KEY` | shared by Rails + Python |
 | Gateway | `CORS_ALLOWED_ORIGINS`, `SECRET_KEY_BASE`, `RAILS_MASTER_KEY`, `RAILS_BUNDLE_WITHOUT` | Rails boot + build hygiene |
-| Frontend | `VITE_REFRESH_DASHBOARD_MS`, `VITE_REFRESH_ANALYSIS_JOBS_MS`, `VITE_REFRESH_ANALYSIS_DETAIL_MS` | **build args** → changing requires frontend rebuild |
+| Frontend | `VITE_REFRESH_DASHBOARD_MS`, `VITE_REFRESH_ANALYSIS_JOBS_MS`, `VITE_REFRESH_ANALYSIS_DETAIL_MS`, `VITE_APP_URL` | **build args** → changing requires frontend rebuild |
+| App domain | `APP_DOMAIN` (host[:port]), `APP_URL` (origin) | nginx `server_name` (runtime envsubst), Rails Host Authorization (`config.hosts`) + mailer host, CORS defaults (gateway falls back to `APP_URL` when `CORS_ALLOWED_ORIGINS` is unset; Python derives `CORS_ORIGINS`), frontend canonical URL |
 
 Changing `.env`: compose reads `env_file` at container **creation** — restart is
 not enough:

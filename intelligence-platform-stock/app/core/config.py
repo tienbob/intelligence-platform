@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,7 +38,14 @@ class Settings(BaseSettings):
     # ENVIRONMENT=development explicitly (docker-compose does).
     ENVIRONMENT: str = "production"
     API_V1_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = Field(default_factory=lambda: ["*"])
+    # Public app origin (scheme + host[:port]) and its host[:port] slice.
+    # APP_URL is the default CORS origin when CORS_ORIGINS is not set, and is
+    # available to services that need to build absolute URLs.
+    APP_DOMAIN: str = "localhost"
+    APP_URL: str = ""
+    # Allowed CORS origins (JSON list, e.g. CORS_ORIGINS=["*"]). Explicitly
+    # set value wins; otherwise derived from APP_URL, then wildcard.
+    CORS_ORIGINS: Optional[List[str]] = None
 
     # ── Database ─────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence"
@@ -106,6 +113,18 @@ class Settings(BaseSettings):
     BACKUP_RETENTION_DAYS: int = 30
     BACKUP_ENABLED: bool = False
     BACKUP_SCHEDULE_HOUR: int = 2
+
+    @model_validator(mode="after")
+    def _resolve_cors_origins(self) -> "Settings":
+        """Fill CORS_ORIGINS when it was not explicitly set.
+
+        An explicit CORS_ORIGINS (e.g. CORS_ORIGINS=["*"] in local dev)
+        always wins. Otherwise fall back to the configured app origin
+        (APP_URL), and finally to the wildcard used before APP_URL existed.
+        """
+        if self.CORS_ORIGINS is None:
+            self.CORS_ORIGINS = [self.APP_URL] if self.APP_URL else ["*"]
+        return self
 
 
 @lru_cache

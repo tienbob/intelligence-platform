@@ -22,3 +22,10 @@ export const REFRESH_ANALYSIS_JOBS_MS = Number(
 export const REFRESH_ANALYSIS_DETAIL_MS = Number(
   import.meta.env.VITE_REFRESH_ANALYSIS_DETAIL_MS ?? 5000,
 );
+
+/**
+ * Public origin of the app (scheme + host[:port]), e.g. https://app.example.com.
+ * Used for canonical/absolute URL construction. Keep in sync with the root
+ * APP_URL env var (see .env.example).
+ */
+export const APP_URL = import.meta.env.VITE_APP_URL ?? 'http://localhost:3000';

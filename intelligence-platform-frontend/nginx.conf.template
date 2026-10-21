@@ -1,6 +1,10 @@
+# Template — the nginx image's entrypoint runs envsubst on /etc/nginx/templates/
+# *.template at container start. NGINX_ENVSUBST_FILTER (Dockerfile) restricts
+# substitution to APP_DOMAIN, so nginx's own $host/$uri variables are untouched.
 server {
     listen 80;
-    server_name localhost;
+    # Public host[:port] the app is served on (root .env APP_DOMAIN).
+    server_name ${APP_DOMAIN};
     root /usr/share/nginx/html;
     index index.html;
 

@@ -61,6 +61,10 @@ services:
       # silently enabling packs that merely live on disk (e.g. hr).
       INTELLIGENCE_DOMAINS: ${INTELLIGENCE_DOMAINS:-stock}
       INTERNAL_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
+      # Public app domain/origin — APP_URL is the default CORS origin when
+      # CORS_ORIGINS is not set (see app/core/config.py).
+      APP_DOMAIN: ${APP_DOMAIN:-localhost:3000}
+      APP_URL: ${APP_URL:-http://localhost:3000}
     expose:
       - "8001"
     volumes:
@@ -148,7 +152,11 @@ services:
       PYTHON_INTERNAL_URL: http://python:8001
       PYTHON_SERVICE_KEY: ${PYTHON_SERVICE_KEY:-dev-service-key-change-me}
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Public app domain/origin: Host Authorization allow-list (config.hosts),
+      # mailer host, and CORS default. CORS_ALLOWED_ORIGINS overrides APP_URL.
+      APP_DOMAIN: ${APP_DOMAIN:-localhost:3000}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-${APP_URL:-http://localhost:3000}}
     expose:
       - "3000"
     depends_on:
@@ -168,7 +176,13 @@ services:
         VITE_REFRESH_DASHBOARD_MS: ${VITE_REFRESH_DASHBOARD_MS:-30000}
         VITE_REFRESH_ANALYSIS_JOBS_MS: ${VITE_REFRESH_ANALYSIS_JOBS_MS:-5000}
         VITE_REFRESH_ANALYSIS_DETAIL_MS: ${VITE_REFRESH_ANALYSIS_DETAIL_MS:-5000}
+        # Baked at build time — changing APP_URL requires a frontend rebuild.
+        VITE_APP_URL: ${APP_URL:-http://localhost:3000}
     container_name: intelligence_stock_frontend
+    environment:
+      # Runtime (not build-time): the nginx entrypoint substitutes APP_DOMAIN
+      # into server_name via /etc/nginx/templates/default.conf.template.
+      APP_DOMAIN: ${APP_DOMAIN:-localhost:3000}
     ports:
       - "3000:80"
     depends_on:
