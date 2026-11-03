@@ -40,6 +40,26 @@ server {
         add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'" always;
     }
 
+    # Inline PDF viewer (Documentation page). Browsers refuse to frame the
+    # PDF while it carries X-Frame-Options DENY / frame-ancestors 'none', so
+    # this exact-match location relaxes ONLY the two frame-deny headers to
+    # same-origin (SAMEORIGIN / frame-ancestors 'self') — other origins still
+    # cannot frame it. NOTE: add_header in a location REPLACES the outer set,
+    # so the full header list from location / is repeated here with only
+    # those two values changed.
+    location = /tickerradar-presentation.pdf {
+        # A missing PDF must 404 rather than fall back to SPA HTML (audit O11).
+        try_files $uri =404;
+        # Revalidate like index.html so a replaced deck goes live immediately;
+        # ETag/Last-Modified keep the revalidation a cheap 304.
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'" always;
+    }
+
     # SPA fallback — serve index.html for all non-file routes.
     # index.html is deliberately revalidated so a deploy takes effect
     # immediately even though /assets/* is cached for a year.
